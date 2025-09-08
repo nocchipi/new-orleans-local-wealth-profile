@@ -32,9 +32,10 @@ model_validation.Rmd
 
 model_validation.Rmd - This file doesn't have much documentation. It generates graphics and explanations for the technical paper for this project, and is part of our model validation. See the technical paper.
 
-03b_poststrat.Rmd - After generating the model objects from the code in 03a_models, this file does the post-stratification of the models onto the local IPUMS data. This is where the final dataframe for the analysis & graphics gets created. This process is computationally intense for a short time. It runs on my PC, but nearly maxes out the CPU for a few minutes. There will be updates to this file in the future from The Data Center, including error calculations.
+03b_poststrat.Rmd - After generating the model objects from the code in 03a_models, this file does the post-stratification of the models onto the local IPUMS data. This is where the final dataframe for the analysis & graphics gets created. This process is computationally intense for a short time. It runs on my PC, but nearly maxes out the CPU for a few minutes.
 
 04_graphics.Rmd - This file generates the graphics for Metro New Orleans included in the wealth profile.
+
 
 
 
