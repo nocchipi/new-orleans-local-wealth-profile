@@ -7,7 +7,7 @@ For a more explicit description of the method and choices, please see the accomp
 
 ## Introduction & notes
 
-Not all code in this repository is meant to be run locally. The code for the models is included, but will need a cloud compute resource to effectively run and store the model objects for use in later steps. There are many places in the code where I connect to a cloud data storage that someone outside of The Data Center will not be able to access, so you will have to run the code and write it to a place that you can access.
+Not all code in this repository is meant to be run locally. The code for the models is included, but will need a cloud compute resource to efficiently run and store the model objects for use in later steps. There are many places in the code where I connect to a cloud data storage that someone outside of The Data Center will not be able to access, so you will have to run the code and write it to a place that you can access.
 
 ## Sequence of events
 
@@ -34,6 +34,7 @@ model_validation.Rmd - This file doesn't have much documentation. It generates g
 
 03b_poststrat.Rmd - After generating the model objects from the code in 03a_models, this file does the post-stratification of the models onto the local IPUMS data. This is where the final dataframe for the analysis & graphics gets created. This process is computationally intense for a short time. It runs on my PC, but nearly maxes out the CPU for a few minutes. There will be updates to this file in the future from The Data Center, including error calculations.
 
-04_graphics.Rmd - This file generates the graphics for Metro New orleans included in the wealth profile.
+04_graphics.Rmd - This file generates the graphics for Metro New Orleans included in the wealth profile.
+
 
 
