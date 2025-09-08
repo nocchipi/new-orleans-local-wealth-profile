@@ -1,0 +1,265 @@
+---
+title: "MRP"
+author: "Haleigh Tomlin"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#reading in models
+
+
+access azure through the datalake-connection.R file and load:
+
+```{r}
+storage_load_rdata(container = cont_proj, file = "April11_anyassets.RData")
+storage_load_rdata(container = cont_proj, file = "April11_anydebts.RData")
+storage_load_rdata(container = cont_proj, file = "April11_assetrank.RData")
+storage_load_rdata(container = cont_proj, file = "April11_debtrank.RData")
+
+
+```
+
+This is where I set a future "plan" - meaning that when I use future, I want it to go parallel on the cores of my computer or "multicore." Another option is "multisession" which opens up several R sessions to run concurrently. I prefer using my computer cores so it distributes the work across parts of my computer rather than maxing out my memory with R sessions. I have a theory that this could work differently/break on a cloud compute resource partly due to the difference in windows (pc) and linux (cloud resource).
+
+Note - When I run things using this, it does use up most of my computer memory for about 2 minutes. It hasn't crashed my computer. I tend to open my task manager before running this Rmd so I can watch it work. If you change it to "multisession" you should be able to see other R sessions pop up in your task manager too.
+
+```{r}
+library(furrr) #this is the same as purrr, but can go parallel. 
+library(future)
+library(progressr)
+future::plan(multicore) # potentially change this to plan(multisession) if you're scared
+furrr_opts <- furrr_options(chunk_size = 10, scheduling = 2, packages = c("rstanarm", "tidybayes", "tidyverse")) # I don't think I actually use these options, but was messing around with it.
+```
+
+# Post-Stratification Process
+
+### Post stratification table
+
+```{r}
+storage_load_rdata(container = cont_proj, file = "Apr11_ipums.RData")
+```
+
+
+```{r}
+#fixing haven labeled?
+ipums_post_strat <- ipums_post_strat %>%
+  mutate(PUMA = as.character(PUMA),
+         COUNTYFIP = as.character(COUNTYFIP),
+         state = as.character(state))
+```
+
+```{r}
+#beep bc it takes a while to load all the data in :)
+beepr::beep(2)
+```
+
+
+
+```{r}
+NOmsa.pumacodes <- c("2400","2401","2402", # Orleans
+                     "2500", # St Bernard, Plaquemines, south Jefferson
+                     "2300","2301","2302", # Jefferson
+                     "2200","2201", # St Tammany
+                     "1900") # river parishes (Includes St. James)
+```
+
+
+#### imputation
+
+So, for the imputation, we need to expand the data by population weights, and impute assets and debts 
+
+```{r}
+#checking how big this will be
+ipums_post_strat %>% dplyr::summarize(total_rows = sum(WGT))
+```
+
+
+```{r, time_it = TRUE}
+start_time <- Sys.time()
+
+ipums_expanded <- ipums_post_strat %>%
+  mutate(id = row_number()) %>%
+  uncount(WGT)
+
+end_time <- Sys.time()
+end_time - start_time
+```
+
+
+Now, we will predict having assets, predict asset values, then predict having debts, predict debt values. This is 4 predictions in this one command. When it just had 2, it took about 2 minutes. It takes 4 minutes to do 4 models. The function predict_allmodels() is created in 01_libraries_functions.R.
+
+```{r}
+start_time <- Sys.time()
+
+ipums_expanded_full <- ipums_expanded %>%
+  rowwise() %>%
+  ungroup() %>%
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~predict_allmodels(.x, any_asset_model, asset_rankmod, any_debt_model, debt_rankmod, ndraw = 1), 
+                           .options = furrr_options(globals = TRUE,
+                                                    scheduling = 2,
+                                                    packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")))) %>%
+  unnest()
+
+
+
+end_time <- Sys.time()
+end_time - start_time
+```
+
+```{r}
+dim(ipums_expanded)
+```
+
+```{r}
+head(ipums_expanded_full)
+```
+
+# checkpoint if I don't want to re-run the above
+```{r}
+#save(ipums_expanded_full, file = "outputs/April15_imputed_ipums.RData")
+#load("outputs/April15_imputed_ipums.RData")
+```
+
+Checking the distributions, before re-weighting and with the 0's.
+
+```{r}
+ggplot(ipums_expanded_full, aes(asset_pred)) + geom_histogram()
+ggplot(ipums_expanded_full, aes(debt_pred)) + geom_histogram()
+```
+
+Debt pred is centered below .5. People were already predicted below 0 and then I imputed 0s. Let's re-rank everyone who has assets or debts. One observation from each will be called 0- when it is actually the lowest percent rank of those who have assets/debts.
+
+This only re-ranks people who are predicted to have any_asset == 1, and any_debt == 1. Then it calls everyone else 0.
+
+```{r}
+ipums_expanded_full <- ipums_expanded_full %>% mutate(asset_rank = case_when(any_asset == 1 ~ asset_pred,
+                                                      any_asset == 0 ~ NA), #have to do this to keep 0's as 0 rather than getting lost in the re-rank
+                                       asset_rank = percent_rank(asset_rank), #this only does people who have assets
+                                       
+                                       debt_rank = case_when(any_debt == 1 ~ debt_pred,
+                                                      any_debt == 0 ~ NA),
+                                         debt_rank = percent_rank(debt_rank))
+
+test <- ipums_expanded_full %>% select(any_asset, asset_pred, asset_rank)
+
+test_d <- ipums_expanded_full %>% select(any_debt, debt_pred, debt_rank)
+
+ggplot(test, aes(asset_rank)) + geom_histogram() + labs(title = "assets")
+
+ggplot(test_d, aes(debt_rank)) + geom_histogram() + labs(title = "debts")
+```
+
+
+Checking how many people should have assets/debts in Louisiana straight from the SIPP data.
+
+```{r}
+sipp18US_svy <- sipp_us  %>%
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2)) %>%
+  as_survey(weights = WPFINWGT,
+                repweights = REPWGT1:REPWGT240,
+                type = "BRR")
+
+sipp18US_svy %>%
+  filter(state == 22) %>%
+  srvyr::summarize(have_assets = survey_mean(hh_any_asset == 1),
+                   have_debts = survey_mean(hh_any_debt == 1),
+                   
+                   have_assets_p = survey_mean(hh_any_asset == 1, proportion = T),
+                   have_debts_p = survey_mean(hh_any_debt == 1, proportion = T))
+```
+
+Checking distribution in the predicted data.
+
+```{r}
+table(ipums_expanded_full$any_asset)
+table(ipums_expanded_full$any_debt)
+```
+
+
+##### crosswalk to dollars
+
+```{r}
+storage_load_rdata(container = cont_proj, file = "April11_USsipp.RData")
+
+sipp_la <- sipp_us %>% filter(state == 22)
+```
+
+
+do this only for people who have assets because that is what we ran the model on, then .01 equals the lowest asset value (rather than .05, due to the zeros)
+
+```{r}
+length(unique(sipp_la$hh_assets))
+length(unique(sipp_la$hh_debts))
+```
+
+
+We use a loess smoother to smooth out the distribution of household assets and debts. Since we only have 415 unique asset values and 249 unique debt values in Louisiana, we smooth over this distribution so that we join to more logical values in our percent rank calculation.
+
+```{r}
+wtd_assets <- sipp_la %>% 
+  drop_na(hh_assets) %>%
+  arrange(hh_assets) %>%
+  mutate(prank_assets = lag(cumsum(WPFINWGT), default = 0) / (sum(WPFINWGT) - 1)) 
+
+sipp_la <- sipp_la %>% left_join(wtd_assets)
+
+wtd_debts <- sipp_la %>% 
+  drop_na(hh_debts) %>%
+  arrange(hh_debts) %>%
+  mutate(prank_debts = lag(cumsum(WPFINWGT), default = 0) / (sum(WPFINWGT) - 1)) 
+
+sipp_la <- sipp_la %>% left_join(wtd_debts)
+```
+
+```{r}
+
+reg_df_assets <- sipp_la %>% filter(hh_any_asset == 1) %>% select(hh_assets, prank_assets, hh_debts, prank_debts) %>% rename(asset_rank = prank_assets, debt_rank = prank_debts)
+
+reg_df_debts <- sipp_la %>% filter(hh_any_debt == 1) %>% select(hh_assets, prank_assets, hh_debts, prank_debts) %>% rename(asset_rank = prank_assets, debt_rank = prank_debts)
+```
+
+What I am doing below, is making sure that there is a "lowest" percent rank value that would be lower than our percent ranks in IPUMS. If we have a value for 0 in both then we shouldn't get asset predictions less than 0 from this smoothing process.
+
+```{r}
+fit_assets10 <- loess(hh_assets ~ asset_rank,
+                 data = reg_df_assets, span = .1)
+
+fit_debts10 <- loess(hh_debts ~ debt_rank,
+                     data = reg_df_debts, span = .1)
+```
+
+Predict smoothed dollar values on the IPUMS data:
+
+```{r}
+ipums_expanded_full <- ipums_expanded_full %>%
+  mutate(asset_dollars = predict(object = fit_assets10, newdata = .),
+         debt_dollars = predict(object = fit_debts10, newdata = .),
+         
+         asset_dollars = ifelse(asset_dollars <= 0 , 1, asset_dollars),
+         debt_dollars = ifelse(debt_dollars <= 0, 1, debt_dollars),
+         
+         asset_dollars = ifelse(any_asset == 0, 0, asset_dollars),
+         debt_dollars = ifelse(any_debt == 0, 0, debt_dollars),
+         
+         networth = asset_dollars - debt_dollars)
+
+```
+
+
+This is the data that goes into 04_graphics.Rmd for visualizing.
+
+```{r}
+save(ipums_expanded_full, file = "outputs/ipums_expanded_full.RData")
+```
+

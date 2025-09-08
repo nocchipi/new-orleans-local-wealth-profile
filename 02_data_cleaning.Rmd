@@ -1,0 +1,1777 @@
+---
+title: "data_cleaning_update"
+author: "Haleigh Tomlin"
+date: "2024-02-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+I am going to load in both datasets, and code them side-by-side one variable at a time, with descriptions, with checkpoints to make sure that the levels, spellings, and classes match. 
+
+# Load in SIPP data
+
+First, you must download the 2018 SIPP data. 
+
+For additional guidance on using SIPP data, please see the SIPP Users' Guide at <https://www.census.gov/programs-surveys/sipp/guidance/users-guide.html>
+
+This code was written in R 4.1.0, and requires the "data.table", "dplyr", and "bit64" packages. Note the 'select' statement in the first use of fread(). Most machines do not have enough memory to read the entire SIPP file into memory. Use a 'select' statement to read in only the columns you are interested in using.
+
+```{r}
+#Read in the Primary Data file. Choose only the variables you want to read in in order to save on memory.
+#This code assumes that your working directory is the same directory as the data.
+
+ds <- c("inputs/pu2018.csv")
+
+#select your variables
+
+pu <- fread(ds, sep = "|", select = c(
+  
+  #Common case identification variables
+  'SSUID','PNUM','MONTHCODE','ERESIDENCEID', 'SHHADID','ERELRPE','TLIVQTR', 'SPANEL','SWAVE',
+  'TEHC_ST', 'TEHC_METRO',
+  
+  # Move indicator
+  'RMOVER', 'TMOVER',
+  
+  #The base weight
+  'WPFINWGT',
+  
+  #Demographics variables
+  
+  'ESEX','TAGE','TRACE','EORIGIN', 'ESPEAK','EEDUC', 'ECITIZEN',
+  'RFAMKIND', 'RFAMNUM', 'RHNUMPER', 'RFRELU18',
+  
+  'AEDUC', 
+  'AHTOTINC',
+  
+  #additional variables for analysis
+  'TPTOTINC', #monthly income - individual - this can be negative based on how they sum investments and such
+  'THTOTINC', #monthly income - household - this can be negative based on how they sum investments and such
+  'ETENURE', # living quarters owned, rented, occupied w/o rent payment?
+  'EMS', #marital status
+  'RDIS', #disability recode
+  
+  #adding from RH ipums pull
+  'TFINCPOV', #family poverty ratio in this month, but it's person-month..
+  'TJB1_OINCAMT', #Spell variable showing how much additional income was received by the respondent through business N
+  'TJB2_OINCAMT',
+  'TJB3_OINCAMT',
+  'TJB4_OINCAMT',
+  'TJB5_OINCAMT',
+  'TJB6_OINCAMT',
+  'TJB7_OINCAMT',
+  
+  'THINC_BOND', #income from interest-earning assets
+  'THINC_BANK', #income from interest-earning assets
+  
+  'THVAL_HOME', #home value
+  'THEQ_HOME', #home equity
+  
+  'TSSSAMT', #how much did ... receive in social security benefit payments in this month
+  'TPSCININC', #sum of the reported monthly amounts received by an indiv. from VA benefits (excpet VA pension), workers comp, unemp, or social security
+  #'TRETINCAMT', #monthly income recode variable: sum of reported monthly amouts from retiremenbt income: pension income, retirement account withdrawals, life insurance benefits, and lump sum pension and retirement acct income
+  #'
+  #'
+  #Monthly employment status recode
+  'RMESR',
+  
+  #class of worker
+  'EJB1_CLWRK', #conditional on  EJB1_JBORSE in C(1,2,3)
+  'TJB1_MWKHRS', # Can use this to check that the first job listed is actually the one the respondent spent the most time at. It is the average number of hours worked per week at job 1 during reference month
+  
+  'EJB2_CLWRK',
+  'TJB2_MWKHRS',
+  
+  'EJB3_CLWRK',
+  'TJB3_MWKHRS',
+  
+  'EJB4_CLWRK',
+  'TJB4_MWKHRS',
+  
+  'EJB5_CLWRK',
+  'TJB5_MWKHRS',
+  
+  'EJB6_CLWRK',
+  'TJB6_MWKHRS',
+  
+  'EJB7_CLWRK',
+  'TJB7_MWKHRS',
+  
+  #Welfare calc
+  'TSSI_AMT', #how much did... receive in SSI payments
+  'TTANF_AMT',
+  'TGA_AMT',
+  
+  #INCRETIRE calc
+  'TRET1AMT', #retirement income from pension comp/union
+  'TRET2AMT' ,#retirement income pension from fed gov
+  'TRET3AMT', #"" state gov
+  'TRET4AMT', #"" local gov
+  'TSUR3AMT', #survivor income from fed
+  'TSUR4AMT', # "" from us gov railroad
+  'TSUR5AMT', #"" st gov pension
+  'TSUR6AMT', #'' loc gov pension
+  'TSUR7AMT', #"" life insurance policy
+  'TSUR8AMT', #"" military retirement pay
+  'TDIS3AMT', #disability income from pension comp/union
+  'TDIS4AMT', # "" fed pension
+  'TDIS5AMT', #"" state gov pension
+  'TDIS6AMT', # "" loc gov pension
+  'TIRAKEOVAL',
+  
+  #debts: following BWDC guidance
+  'THDEBT_AST', #total debt recodes at hh level
+  'THDEBT_USEC',
+  'THDEBT_SEC',
+  
+  #individual level debt types - to create an "any debt" variable.
+  #will roll up to HH level after creating it for the individuals.
+  
+  'EDEBT_CC',
+  'EDEBT_MED',
+  'EDEBT_ED',
+  'EDEBT_OT',
+  'EPRDEBT',
+  'APRDEBT',
+  'EMHDEBT',
+  'EVEH1DEBT',
+  'EVEH2DEBT',
+  'EVEH3DEBT',
+  'EMCYCDEBT',
+  'EBOATDEBT',
+  'ERVDEBT',
+  'EORECDEBT',
+  'TDEBT_BUS',
+  
+  'THDEBT_HOME',
+  'TORPDEBTVAL',
+  'THDEBT_RE',
+  'THDEBT_VEH',
+  'TBOATDEBTVAL',
+  'TMCYCDEBTVAL',
+  'TRVDEBTVAL',
+  'TORECDEBTVAL',
+  'TBSJ1DEBTVAL',
+  'TBSJ2DEBTVAL',
+  'TBSJ3DEBTVAL',
+  'TBSJ4DEBTVAL',
+  'TBSJ5DEBTVAL',
+  'TBSI1DEBTVAL',
+  'TBSI2DEBTVAL',
+  'TBSI3DEBTVAL',
+  'THDEBT_CC',
+  'THDEBT_ED',
+  'THDEBT_OT',
+  'TMED_AMT',
+  
+  #assets: following BWDC guidance
+  'THVAL_AST', #total asset recodes at hh level
+  'THVAL_BANK',
+  'THVAL_BOND',
+  'THVAL_STMF',
+  'THVAL_RENT',
+  'THVAL_RE',
+  'THVAL_BUS',
+  #'THVAL_HOME', #included above, but leaving it here as a reminder about grouping.
+  'THVAL_VEH',
+  'THVAL_ESAV',
+  'THVAL_RET',
+  'THVAL_OTH',
+
+  
+  #individual level asset types - to create an "any asset" variable
+  #will roll up to HH level after creating it for the individuals.
+  'EOWN_TREQ',
+  'EOWN_ANNEQ',
+  'EOWN_BSI',
+  
+  #'EOWN_BSJ', making this later using the following variables using all 12 months of data
+  'EJB1_JBORSE',
+  'EJB2_JBORSE',
+  'EJB3_JBORSE',
+  'EJB4_JBORSE',
+  'EJB5_JBORSE',
+  'EJB6_JBORSE',
+  'EJB7_JBORSE', #EJB(n)_JBORSE = business as a job. n = 1...7 for reporting up to 7 jobs
+  
+  
+  'EOWN_CD',
+  'EOWN_CHK',
+  'EOWN_GOVS',
+  'EOWN_IRAKEO',
+  'EOWN_LIFE',
+  'ELIFE_TYPE',
+  'EOWN_MCBD',
+  'EOWN_MF',
+  'EOWN_MM',
+  'EOWN_OINV',
+  'EOWN_RE',
+  'EOWN_RP',
+  'EOWN_SAV',
+  'EOWN_ST',
+  'EOWN_THR401',
+  'EOWN_ESAV',
+  'EOWN_RECV',
+  'EOWN_VEH',
+  'TVEH_NUM'
+  #'ETENURE' I have already selected this above, but keeping it here as part of the asset profile
+  ))
+
+names(pu) <- toupper(names(pu))
+
+
+dw <- c("inputs/rw2018.csv")
+rw <- fread(dw, sep = "|")
+
+names(rw) <- toupper(names(rw))
+
+sipp_us <- inner_join(pu, rw, by = c("SSUID","PNUM","MONTHCODE", "SPANEL", "SWAVE")) 
+```
+
+# Load in IPUMS data
+
+This can be done using the IPUMS api, which I didn't know about at the start of this project. I downloaded it from IPUMS USA for Louisiana.
+
+```{r}
+ddi <-  read_ipums_ddi("inputs/usa_00025.xml")
+ipums_la <- read_ipums_micro(ddi)
+```
+
+```{r}
+summary(ipums_la)
+```
+
+Our analysis is at the household-level but in many cases we have to use the person-level variables to roll up characteristics to the household-level later on. For demographic characteristics, we use the householder's characteristics.
+
+In SIPP, individuals are identified by the unique combination of SSUID and PNUM. Households are identified by SSUID and SHHADID.
+
+In IPUMS, individuals are identified by YEAR, DATANUM, SERIAL, and PERNUM. Households are identified by YEAR, DATANUM, and SERIAL.
+
+I am creating all variables, then will filter to householders/household characteristics.
+
+
+### Household income
+
+In IPUMS, household income is reported for the past 12 months previous to the month interviewed. 
+
+In SIPP, the household income variable is reported for each month, so we have to sum this across the year.
+
+```{r}
+
+## IPUMS
+
+ipums_la <- ipums_la %>%
+  mutate(hh_income_adj = as.numeric(case_when(HHINCOME == 9999999 ~ NA,
+                                   YEAR == 2014 ~ HHINCOME * 1.06,
+                                   YEAR == 2015 ~ HHINCOME * 1.06,
+                                   YEAR == 2016 ~ HHINCOME * 1.05,
+                                   YEAR == 2017~ HHINCOME * 1.02,
+                                   YEAR == 2018 ~ HHINCOME)),
+         
+                  hh_income = factor(case_when(hh_income_adj <= 0 ~ "No income or loss", 
+                                           hh_income_adj > 0 & hh_income_adj < 5000 ~ "Less than $5,000",
+                                           hh_income_adj >= 5000 & hh_income_adj < 15000 ~ "$5,000-15,000",
+                                           hh_income_adj >= 15000 & hh_income_adj < 20000 ~ "$15,000-$20,000",
+                                           hh_income_adj >= 20000 & hh_income_adj < 25000 ~ "$20,000-$25,000",
+                                           hh_income_adj >= 25000 & hh_income_adj < 30000 ~ "$25,000-$30,000",
+                                           hh_income_adj >= 30000 & hh_income_adj < 35000 ~ "$30,000-$35,000",
+                                           hh_income_adj >= 35000 & hh_income_adj < 45000 ~ "$35,000-$45,000",
+                                           hh_income_adj >= 45000 & hh_income_adj < 55000 ~ "$45,000-$55,000",
+                                           hh_income_adj >= 55000 & hh_income_adj < 65000 ~ "$55,000-$65,000",
+                                           hh_income_adj >= 65000 & hh_income_adj < 75000 ~ "$65,000-$75,000",
+                                           hh_income_adj >= 75000 & hh_income_adj < 90000 ~ "$75,000-$90,000",
+                                           hh_income_adj >= 90000 & hh_income_adj < 105000 ~ "$95,000-$105,000",
+                                           hh_income_adj >= 105000 & hh_income_adj < 125000 ~ "$105,000-$125,000",
+                                           hh_income_adj >= 125000 & hh_income_adj < 150000 ~ "$125,000-$150,000",
+                                           hh_income_adj >= 150000 & hh_income_adj < 200000 ~ "$150,000-$200,000",
+                                           hh_income_adj >= 200000 & hh_income_adj < 500000 ~ "$200,000-$500,000",
+                                           hh_income_adj >= 500000 ~ "$500,000 or more",
+                                           T ~ NA),
+                                 levels = c("No income or loss",
+                                            "Less than $5,000",
+                                            "$5,000-15,000",
+                                            "$15,000-$20,000",
+                                            "$20,000-$25,000",
+                                            "$25,000-$30,000",
+                                            "$30,000-$35,000",
+                                            "$35,000-$45,000",
+                                            "$45,000-$55,000",
+                                            "$55,000-$65,000",
+                                            "$65,000-$75,000",
+                                            "$75,000-$90,000",
+                                            "$95,000-$105,000",
+                                            "$105,000-$125,000",
+                                            "$125,000-$150,000",
+                                            "$150,000-$200,000",
+                                            "$200,000-$500,000",
+                                            "$500,000 or more")))
+```
+
+```{r}
+# SIPP
+
+sipp_us <- sipp_us %>%
+  group_by(PNUM, SSUID, SHHADID) %>%
+  mutate(hh_inc_yr = case_when(TLIVQTR %in% c(1,2) &
+                                 ERELRPE %in% c(1,2) ~ sum(THTOTINC, na.rm = T)),
+         hh_inc_over200k = case_when(hh_inc_yr >= 200000 ~ 1,
+                                     T ~ 0),
+         hh_income = factor(case_when(hh_inc_yr <= 0 ~ "No income or loss", 
+                                           hh_inc_yr > 0 & hh_inc_yr < 5000 ~ "Less than $5,000",
+                                           hh_inc_yr >= 5000 & hh_inc_yr < 15000 ~ "$5,000-15,000",
+                                           hh_inc_yr >= 15000 & hh_inc_yr < 20000 ~ "$15,000-$20,000",
+                                           hh_inc_yr >= 20000 & hh_inc_yr < 25000 ~ "$20,000-$25,000",
+                                           hh_inc_yr >= 25000 & hh_inc_yr < 30000 ~ "$25,000-$30,000",
+                                           hh_inc_yr >= 30000 & hh_inc_yr < 35000 ~ "$30,000-$35,000",
+                                           hh_inc_yr >= 35000 & hh_inc_yr < 45000 ~ "$35,000-$45,000",
+                                           hh_inc_yr >= 45000 & hh_inc_yr < 55000 ~ "$45,000-$55,000",
+                                           hh_inc_yr >= 55000 & hh_inc_yr < 65000 ~ "$55,000-$65,000",
+                                           hh_inc_yr >= 65000 & hh_inc_yr < 75000 ~ "$65,000-$75,000",
+                                           hh_inc_yr >= 75000 & hh_inc_yr < 90000 ~ "$75,000-$90,000",
+                                           hh_inc_yr >= 90000 & hh_inc_yr < 105000 ~ "$95,000-$105,000",
+                                           hh_inc_yr >= 105000 & hh_inc_yr < 125000 ~ "$105,000-$125,000",
+                                           hh_inc_yr >= 125000 & hh_inc_yr < 150000 ~ "$125,000-$150,000",
+                                           hh_inc_yr >= 150000 & hh_inc_yr < 200000 ~ "$150,000-$200,000",
+                                           hh_inc_yr >= 200000 & hh_inc_yr < 500000 ~ "$200,000-$500,000",
+                                           hh_inc_yr >= 500000 ~ "$500,000 or more",
+                                           T ~ NA),
+                                 levels = c("No income or loss",
+                                            "Less than $5,000",
+                                            "$5,000-15,000",
+                                            "$15,000-$20,000",
+                                            "$20,000-$25,000",
+                                            "$25,000-$30,000",
+                                            "$30,000-$35,000",
+                                            "$35,000-$45,000",
+                                            "$45,000-$55,000",
+                                            "$55,000-$65,000",
+                                            "$65,000-$75,000",
+                                            "$75,000-$90,000",
+                                            "$95,000-$105,000",
+                                            "$105,000-$125,000",
+                                            "$125,000-$150,000",
+                                            "$150,000-$200,000",
+                                            "$200,000-$500,000",
+                                            "$500,000 or more"))) %>%
+  ungroup()
+```
+
+
+### Sex and Age
+
+```{r}
+#IPUMS
+ipums_la <- ipums_la %>%
+  mutate(age = factor(case_when(AGE %in% c(15:24) ~ "15-24",
+                               AGE %in% c(25:29) ~ "25-29",
+                               AGE %in% c(30:34) ~ "30-34",
+                               AGE %in% c(35:39) ~ "35-39",
+                               AGE %in% c(40:44) ~ "40-44",
+                               AGE %in% c(45:49) ~ "45-49",
+                               AGE %in% c(50:54) ~ "50-54",
+                               AGE %in% c(55:59) ~ "55-59",
+                               AGE %in% c(60:64) ~ "60-64",
+                               AGE %in% c(65:69) ~ "65-69",
+                               AGE %in% c(70:74) ~ "70-74",
+                               AGE %in% c(75:79) ~ "75-79",
+                               AGE %in% c(80:84) ~ "80-84",
+                               AGE >= 85 ~ "85+",
+                               AGE < 15 ~ "under 15"),
+                     levels = c("under 15",
+                                "15-24",
+                                "25-29",
+                                "30-34",
+                                "35-39",
+                                "40-44",
+                                "45-49",
+                                "50-54",
+                                "55-59",
+                                "60-64",
+                                "65-69",
+                                "70-74",
+                                "75-79",
+                                "80-84",
+                                "85+")),
+         
+         male = factor(case_when(SEX == 1 ~ 1,
+                               SEX == 2 ~ 0)))
+```
+
+
+```{r}
+#SIPP
+sipp_us <- sipp_us %>%
+  mutate(age = factor(case_when(TAGE %in% c(15:24) ~ "15-24",
+                                    TAGE %in% c(25:29) ~ "25-29",
+                                    TAGE %in% c(30:34) ~ "30-34",
+                                    TAGE %in% c(35:39) ~ "35-39",
+                                    TAGE %in% c(40:44) ~ "40-44",
+                                    TAGE %in% c(45:49) ~ "45-49",
+                                    TAGE %in% c(50:54) ~ "50-54",
+                                    TAGE %in% c(55:59) ~ "55-59",
+                                    TAGE %in% c(60:64) ~ "60-64",
+                                    TAGE %in% c(65:69) ~ "65-69",
+                                    TAGE %in% c(70:74) ~ "70-74",
+                                    TAGE %in% c(75:79) ~ "75-79",
+                                    TAGE %in% c(80:84) ~ "80-84",
+                                    TAGE >= 85 ~ "85+",
+                                    TAGE < 15 ~ "under 15"),
+                          levels = c("under 15",
+                                     "15-24",
+                                     "25-29",
+                                     "30-34",
+                                     "35-39",
+                                     "40-44",
+                                     "45-49",
+                                     "50-54",
+                                     "55-59",
+                                     "60-64",
+                                     "65-69",
+                                     "70-74",
+                                     "75-79",
+                                     "80-84",
+                                     "85+")),
+         
+         male = factor(case_when(ESEX == 1 ~ 1,
+                                    ESEX == 2 ~ 0)))
+```
+
+
+### Education
+
+```{r}
+#IPUMS
+ipums_la <- ipums_la %>%
+  mutate(EDUCD = as.numeric(EDUCD),
+         edu = factor(case_when(EDUCD %in% c(2:61) ~ "less than HS",
+                                  EDUCD %in% c(62:64) ~ "HS equivalent",
+                                  EDUCD %in% c(65:100) ~ "some college",
+                                  EDUCD == 101 ~ "Bachelor's degree",
+                                  EDUCD %in% c(110:116) ~ "Advanced degree",
+                                  EDUCD %in% c(999,1,0) ~ NA),
+                          levels = c("less than HS",
+                                     "HS equivalent",
+                                     "some college",
+                                     "Bachelor's degree",
+                                     "Advanced degree")))
+```
+
+
+```{r}
+#SIPP
+sipp_us <- sipp_us %>%
+  mutate(edu = factor(case_when(EEDUC %in% c(31:38) ~ "less than HS",
+                                    EEDUC == 39 ~ "HS equivalent",
+                                    EEDUC %in% c(40:42) ~ "some college",
+                                    EEDUC == 43 ~ "Bachelor's degree",
+                                    EEDUC %in% c(44:46) ~ "Advanced degree"),
+                          levels = c("less than HS",
+                                     "HS equivalent",
+                                     "some college",
+                                     "Bachelor's degree",
+                                     "Advanced degree")))
+```
+
+
+### Race
+
+For both SIPP and IPUMS, I have to create the hispanic variable and race variables in order to match the race/ethnicity
+
+```{r}
+#IPUMS
+
+ipums_la <- ipums_la %>%
+  mutate(hisp_fct = as.factor(case_when(HISPAN %in% c(1,2,3,4) ~ "hispanic",
+                                   HISPAN == 0 ~ "non-hispanic",
+                                   HISPAN == 9 ~ NA)),
+         
+         race_fct = as.factor(case_when(RACE == 1 ~ "white",
+                                        RACE == 2 ~ "black",
+                                        RACE %in% c(4, 5, 6) ~ "asian",
+                                        T ~ "other")),
+         
+         race_eth = factor(case_when(hisp_fct == "hispanic" ~ "Hispanic",
+                         hisp_fct == "non-hispanic" & race_fct == "white" ~ "White, non-Hispanic",
+                         hisp_fct == "non-hispanic" & race_fct == "black" ~ "Black, non-Hispanic",
+                         hisp_fct == "non-hispanic" & race_fct == "asian" ~ "Asian, non-Hispanic",
+                         hisp_fct == "non-hispanic" & race_fct == "other" ~ "Other race, non-Hispanic"),
+                           levels = c("White, non-Hispanic",
+                                      "Black, non-Hispanic",
+                                      "Hispanic",
+                                      "Asian, non-Hispanic",
+                                      "Other race, non-Hispanic")))
+```
+
+```{r}
+#SIPP
+sipp_us <- sipp_us %>%
+  mutate(hisp_fct = factor(case_when(EORIGIN == 1 ~ "hispanic",
+                                        EORIGIN == 2 ~ "non-hispanic"),
+                           levels = c("hispanic", "non-hispanic")),
+         
+         race_fct = as.factor(case_when(TRACE == 1 ~ "white",
+                                        TRACE == 2 ~ "black",
+                                        TRACE == 4 ~ "asian",
+                                        T ~ "other")),
+         race_eth = factor(case_when(hisp_fct == "hispanic" ~ "Hispanic",
+                              hisp_fct == "non-hispanic" & race_fct == "white" ~ "White, non-Hispanic",
+                              hisp_fct == "non-hispanic" & race_fct == "black" ~ "Black, non-Hispanic",
+                              hisp_fct == "non-hispanic" & race_fct == "asian" ~ "Asian, non-Hispanic",
+                              hisp_fct == "non-hispanic" & race_fct == "other" ~ "Other race, non-Hispanic"),
+                           levels = c("White, non-Hispanic",
+                                      "Black, non-Hispanic",
+                                      "Hispanic",
+                                      "Asian, non-Hispanic",
+                                      "Other race, non-Hispanic")))
+
+```
+
+### Citizenship
+
+```{r}
+#ipums
+
+ipums_la <- ipums_la %>% 
+  mutate(citizen = factor(case_when(CITIZEN %in% c(0,1,2) ~ 1,
+                                        CITIZEN == 3 ~ 0)))
+```
+
+
+```{r}
+#sipp
+sipp_us <- sipp_us %>%
+  mutate(citizen = factor(case_when(ECITIZEN == 1 ~ 1,
+                                           ECITIZEN == 2 ~ 0)))
+```
+
+
+### Disability Status
+
+I had to do some matching between SIPP and IPUMS since IPUMS has more detailed disability status variables. IPUMS has it broken up while SIPP has a combined dummy variable.
+
+SIPP's disability recode variable means to have at least 1 of 6 core disability measures: Hearing, Seeing, Cognitive, Ambulatory, Self-care, Independent Living.  Luckily, IPUMS has variables for each of this difficulties. I am going to make a dummy variable so it matches SIPP's measure.
+
+```{r}
+#IPUMS
+
+ipums_la <- ipums_la %>%
+  mutate(disability = factor(case_when(
+                                              (DIFFSENS == 2) | #vision or hearing difficulty
+                                                (DIFFREM == 2) | #cognitive
+                                                (DIFFPHYS == 2) | #ambulatory
+                                                (DIFFCARE == 2) | #self-care
+                                                (DIFFMOB == 2) ~ 1, #independent living
+                                              (DIFFSENS == 1) |
+                                                (DIFFREM == 1) |
+                                                (DIFFPHYS == 1) |
+                                                (DIFFCARE == 1) |
+                                                (DIFFMOB == 1) ~ 0,
+                                              T ~ NA)))
+```
+
+
+```{r}
+#SIPP
+
+sipp_us <- sipp_us %>%
+  mutate(disability = factor(case_when(RDIS == 1 ~ 1,
+                                           RDIS == 2 ~ 0)))
+```
+
+
+### Class of Worker
+
+This variable is meant to capture the employment status of the householder, as well as the type of work the householder is involved in, if employed. We want to specifically capture non-employment, as well as being self-employed as major indicators of where someone might fall in the wealth distribution compared to the rest of the population.
+
+We create the following levels for Class of Worker:
+
+  - Self employed (incorporated)
+  - Self employed (not incorporated)
+  - Works for wages
+  - Not Employed under age 65
+  - Not Employed over age 65
+
+IPUMS defines workers based on the workplace in which they spend the most of their time during the reference period, for the population over 16 years old. SIPP, on the other hand, provides comprehensive employment/income data and allows respondents to list up to 7 businesses or jobs per month. To match these two, we select only the first job listed from SIPP and capture this information only for the householder.
+
+SIPP considers employment status for those aged over 15, while IPUMS considers employment status for those aged over 16.
+
+SIPP measures employment by week in each month, and Class of Worker is conditional on holding a job during the reference month. If we include this variable, we basically need to randomly sample from the months 1:12 since IPUMS is conducted on a rolling schedule, and class of worker is calculated for "last week." 
+
+Need to subset IPUMS EMPSTAT to Employed since SIPP has CLASSWRKR conditional on being employed in the reference month. 
+
+The only NA's in IPUMS from this variable creation are for "Unpaid family workers." This retains almost the full SIPP household sample. We call these oeople "not employed" to avoid dropping NAs from the IPUMS sample.
+
+```{r}
+#IPUMS
+
+ipums_la <- ipums_la %>% 
+  mutate(class_worker = case_when(EMPSTAT == 1 & 
+                                CLASSWKRD == 13 ~ "self employed, not incorporated",
+                              EMPSTAT == 1 & 
+                                CLASSWKRD == 14 ~ "self employed, incorporated",
+                              EMPSTAT == 1 & 
+                                CLASSWKRD %in% c(22, 23, 25, 27, 28) ~ "wage and salary",
+                              EMPSTAT %in% c(0, 2, 3) & AGE >= 65 ~ "not employed over 64 years",
+                              EMPSTAT %in% c(0, 2, 3) & AGE < 65 ~ "not employed 64 years and under",
+                              
+                              #calling the unpaid family workers not employed.
+                              EMPSTAT == 1 & AGE >= 65 & CLASSWKRD == 29 ~ "not employed over 64 years",
+                              EMPSTAT == 1 & AGE < 65 & CLASSWKRD == 29 ~ "not employed 64 years and under")) %>%
+  mutate(class_worker = factor(class_worker, levels = c("self employed, incorporated",
+                                                "self employed, not incorporated",
+                                                "wage and salary",
+                                                "not employed over 64 years",
+                                                "not employed 64 years and under")))
+
+```
+
+Must create sample-month by row using rowwise(). This considerably slows this down. Otherwise, though, everyone gets the same random sample month.
+
+* On 5/9/25, RK & HT noticed that IPUMS doesn't have armed forces data, but might include those people in Federal government. In sipp, we include Armed forces. 
+
+```{r}
+#SIPP
+
+sipp_us <- sipp_us %>%
+  group_by(SSUID, SHHADID) %>%
+  mutate(sample_month = sample(1:12, 1, replace = T),
+         
+         class_worker = case_when(MONTHCODE == sample_month &
+                                TAGE >= 16 &
+                                EJB1_JBORSE %in% c(1,2,3) & 
+                                EJB1_CLWRK == 7 ~ "self employed, incorporated",
+                              
+                              MONTHCODE == sample_month &
+                                TAGE >= 16 &
+                                EJB1_JBORSE %in% c(1,2,3) &
+                                EJB1_CLWRK == 8 ~ "self employed, not incorporated",
+                              
+                              MONTHCODE == sample_month &
+                                TAGE >= 16 &
+                                EJB1_JBORSE %in% c(1,2,3) &
+                                EJB1_CLWRK %in% c(1,2,3,4,5,6) ~ "wage and salary",
+                              
+                              MONTHCODE == sample_month & 
+                                TAGE >= 16 &
+                                TAGE >= 65 &
+                                is.na(EJB1_JBORSE) ~ "not employed over 64 years",
+                              
+                              MONTHCODE == sample_month & 
+                                TAGE >= 16 &
+                                TAGE < 65 &
+                                is.na(EJB1_JBORSE) ~ "not employed 64 years and under")) %>%
+  
+  ## I have NAs for all months that are not the "sampled month." The code below copies that information to all other months, so a householder should have the same data for all months now.
+  
+  group_by(SSUID, PNUM) %>% 
+  mutate(class_worker = last(na.omit(class_worker))) %>%
+  ungroup() %>%
+  mutate(class_worker = factor(class_worker, levels = c("self employed, incorporated",
+                                                "self employed, not incorporated",
+                                                "wage and salary",
+                                                "not employed over 64 years",
+                                                "not employed 64 years and under")))
+```
+
+
+### Household Structure/Family Type
+
+There are many ways to capture household and family structure. 
+
+IPUMS has the following levels of "household type:"
+
+     0                                    N/A
+     1        Married-couple family household
+     2      Male householder, no wife present
+     3 Female householder, no husband present
+     4         Male householder, living alone
+     5     Male householder, not living alone
+     6       Female householder, living alone
+     7   Female householder, not living alone
+     9         HHTYPE could not be determined
+     
+
+NCHILD is defined as "number of own children" residing with each individual in the sample. In SIPP, the closest variable is "RFRELU18" which is the number of children in the FAMILY under the age of 18. However, this can be niece-nephew, siblings, etc. 
+
+From SIPP, we have the variables "RFAMKIND" and "RFRELU18", which are the kind of family, and the number of people under 18 years of age in the family, respectively. The SIPP uses the Census definition for "family" households, so this is consistent between surveys. According to the SIPP 2018 User's Guide:  "People who are unrelated to
+anyone else in the household will have a unique value of RFAMNUM and will not have a value for type
+of family (RFAMKIND)."
+
+
+Decision:
+
+NCHILD from IPUMS can be of any age. I create a "child flag" which counts the number of people within a household who are under 18, then sum this variable to create a "children present" flag for a household. I then do the same from SIPP where we sum the children individuals (TAGE < 18) and create a household-level flag. 
+
+Our variable levels are:
+
+- married householder with children under 18 present in household
+- married w/o children under 18
+- single householder with children present
+- single householder without children present 
+
+There will be both family and nonfamily households present in many of these levels, but it should capture almost everybody.
+
+Both surveys have marital status conditional on being age 15+. 
+There are very few edge cases where the only person present in the household is under 18, and that is considered "single with children," or two teenagers married would be considered "married with children" under this definition. Because of this, in the cases where a householder is under 18, I check the household size. If the householder is under 18 and is the only person in the household, they are coded as "single householder without children present." If the householder is under 18, married, and there are only 2 people in the household, they are coded as "married householder without children." Similarly, "married with children" requires > 2 people present in the household, while "single with children present" requires > 1 person present in the household.
+
+The very small edge case that we are unable to fully prevent (if there is any presence in the sample), is if someone under the age of 18 is a single householder and has other roommates under the age of 18. These people will be categorized as "single with children" rather than "single without children" (most other roommates in the sample will be categorized under "single without children"). If someone under the age of 18 lives alone they will be categorized as "single without children."
+
+```{r}
+#IPUMS
+
+ipums_la <- ipums_la %>%
+  mutate(child_flag = case_when(AGE < 18 ~ 1, 
+                           T ~ 0)) %>%
+  group_by(YEAR, SERIAL) %>%
+  mutate(child_sum = sum(child_flag, na.rm = T),
+         
+         hh_size = max(PERNUM)) %>%
+  ungroup()
+  
+
+ipums_la <- ipums_la %>%
+  mutate(household_type = case_when(AGE >= 18 & (MARST %in% c(1,2) & child_sum > 0)  ~ "married with children present",
+
+                                    AGE >= 18 & (MARST %in% c(1,2) & child_sum == 0)  ~ "married without children",
+
+                                    AGE >= 18 & MARST %in% c(3,4,5,6) & child_sum > 0 ~ "single with children present",
+                                    AGE >= 18 & MARST %in% c(3,4,5,6) & child_sum == 0 ~ "single without children",
+                                    
+                                    #edge cases
+                                    AGE < 18 & (MARST %in% c(1,2) & child_sum > 0) & hh_size > 2 ~ "married with children present",
+                                    AGE < 18 & (MARST %in% c(1,2) & child_sum > 0) & hh_size == 2 ~ "married without children", ### MARST == 1 5/9 RK & HT edit
+                                    AGE < 18 & MARST %in% c(3,4,5,6) & child_sum > 0 & hh_size > 1 ~ "single with children present",
+                                    AGE < 18 & MARST %in% c(3,4,5,6) & child_sum > 0 & hh_size == 1 ~ "single without children",
+                                    T ~ NA),
+         household_type = factor(household_type,
+                                 levels = c("married with children present",
+                                            "married without children",
+                                            "single with children present",
+                                            "single without children")))
+
+
+```
+
+
+```{r}
+#SIPP
+
+sipp_us <- sipp_us %>%
+  mutate(child_flag = case_when(TAGE < 18 ~ 1,
+                                T ~ 0)) %>%
+  group_by(SSUID, SHHADID) %>%
+  mutate(child_sum = sum(child_flag, na.rm = T)) %>%
+  ungroup()
+  
+sipp_us <- sipp_us %>% 
+  mutate(household_type = case_when(TAGE >= 18 & EMS %in% c(1,2) & child_sum > 0 ~ "married with children present",
+                                    TAGE >= 18 & EMS %in% c(1,2) & child_sum == 0 ~ "married without children",
+                                    TAGE >= 18 & EMS %in% c(3,4,5,6) & child_sum > 0 ~ "single with children present",
+                                    TAGE >= 18 & EMS %in% c(3,4,5,6) & child_sum == 0 ~ "single without children",
+                                    
+                                    
+                                    #edge cases
+                                    TAGE < 18 & (EMS %in% c(1,2) & child_sum > 0) & RHNUMPER > 2 ~ "married with children present", ### EMS == 1 5/9 RK & HT edit
+                                    TAGE < 18 & (EMS %in% c(1,2) & child_sum > 0) & RHNUMPER == 2 ~ "married without children", ### EMS == 1 5/9 RK & HT edit
+                                    TAGE < 18 & EMS %in% c(3,4,5,6) & child_sum > 0 & RHNUMPER > 1 ~ "single with children present",
+                                    TAGE < 18 & EMS %in% c(3,4,5,6) & child_sum > 0 & RHNUMPER == 1 ~ "single without children",
+                                    T ~ NA),
+         household_type = factor(household_type,
+                                 levels = c("married with children present",
+                                            "married without children",
+                                            "single with children present",
+                                            "single without children")))
+
+
+```
+
+
+
+### English as first language
+
+```{r}
+#IPUMS
+
+ipums_la <- ipums_la %>%
+  mutate(english_at_home = factor(case_when(LANGUAGE == 1 ~ 1,
+                                   LANGUAGE %in% c(0,95,96,97) ~ NA,
+                                   LANGUAGE %in% c(2:94) ~ 0)))
+```
+
+```{r}
+#SIPP
+
+sipp_us <- sipp_us %>%
+  mutate(english_at_home = factor(case_when(ESPEAK == 1 ~ 0,
+                            ESPEAK == 2 ~ 1,
+                            is.na(ESPEAK) ~ NA)))
+```
+
+
+### Welfare / Supplemental Income Receipt / Poverty Status
+
+In the SIPP, all types of supplemental income are reported at the individual level. We have to roll these up to the house-hold level.
+
+In IPUMS, it reports welfare income for each individual over the past 12 months at the time of the interview. Because of this, I add up the public assistance over the entire SIPP to create this indicator.
+
+The following are included within INCWELFR in ipums, which we call "public assistance."
+
+- federal/state Supplemental Security Income (SSI) payments to elderly (age 65+), blind, or disabled persons with low incomes. (In the 2000 census, the ACS, and the PRCS, SSI payments are specified in INCSUPP only, not in INCWELFR);
+- Aid to Families with Dependent Children (AFDC); and
+- General Assistance (GA). (This does not include separate payments for hospital or other medical care.)
+
+We translate this to SIPP by adding  TSSI_AMT (Supplemental Security) + TTANF_AMT (which replaced AFDC) + TGA_AMT (General assistnace). these have to be rolled up to the household-level in both SIPP and IPUMS.
+
+Poverty is for the family in both surveys. 
+
+```{r}
+#IPUMS
+ipums_la <- ipums_la %>%
+  mutate(public_assistance_pp = case_when(INCWELFR == 99999 ~ 0,
+                                          INCWELFR > 0 & INCWELFR != 99999 ~ 1,
+                                      T ~ 0),
+         poverty = factor(case_when(POVERTY <= 100 ~ 1,
+                                POVERTY == 1 ~ 1,
+                                POVERTY == 0 ~ NA,
+                                POVERTY == 501 ~ 0,
+                                T ~ 0)), #this is already at the household-level.
+         
+         social_security_pp = case_when(INCSS == 99999 ~ 0,
+                                        INCSS > 0 & INCSS != 99999 ~ 1,
+                                      T ~ 0)) %>%
+  group_by(YEAR, SERIAL) %>%
+  mutate(public_assistance_hh = sum(public_assistance_pp, na.rm = T),
+         social_security_hh = sum(social_security_pp, na.rm = T),
+         
+         public_assistance = factor(case_when(public_assistance_hh > 0 ~ 1,
+                                       public_assistance_hh == 0 ~ 0)),
+         
+         social_security = factor(case_when(social_security_hh > 0 ~ 1,
+                                     social_security_hh == 0 ~ 0))) %>%
+  ungroup()
+```
+
+```{r}
+#SIPP
+sipp_us <- sipp_us %>%
+  group_by(SSUID, PNUM) %>%
+  mutate(TSSI_yr = sum(TSSI_AMT, na.rm = T),
+         TTANF_yr = sum(TTANF_AMT, na.rm = T),
+         TGA_yr = sum(TGA_AMT, na.rm = T),
+         TSSS_yr = sum(TSSSAMT, na.rm = T),
+         welfare_pp = TSSI_yr + TTANF_yr + TGA_yr,
+         ss_pp = TSSS_yr,
+         poverty = factor(case_when(TFINCPOV <= 1 ~ 1,
+                                T ~ 0)))%>% 
+  ungroup() %>%
+  group_by(SSUID, SHHADID) %>% # rolling up public assistance and social security to the household level. POV is a family-level variable.
+  mutate(welfare_hh = sum(welfare_pp, na.rm = T),
+         public_assistance = factor(case_when(welfare_hh > 0 ~ 1,
+                                      T ~ 0)),
+         ss_hh = sum(ss_pp, na.rm = T),
+         social_security = factor(case_when(ss_hh > 0 ~ 1,
+                                 T ~ 0))) %>%
+  ungroup()
+  
+```
+
+
+```{r}
+ipums_la <- ipums_la %>% mutate(income_NA = case_when(HHINCOME == 9999999 ~ T,
+                                                          T ~ F),
+                                poverty_NA = case_when(POVERTY == 0 ~ T,
+                                                       T ~ F))
+                                
+```
+
+
+### Home Value
+
+```{r}
+# IPUMS
+
+ipums_la <- ipums_la %>%
+  mutate(homevalue = factor(case_when(OWNERSHP  == 2 ~ "not a homeowner",
+                                      VALUEH == 9999999 ~ NA,
+                                        VALUEH < 50000 ~ "Less than $50,000",
+                                        VALUEH >= 50000 & VALUEH <= 99999 ~ "$50,000 to $99,999",
+                                        VALUEH >= 100000 & VALUEH <= 299999 ~ "$100,000 to $299,999",
+                                        VALUEH >= 300000 & VALUEH <= 499999 ~ "$300,000 to $499,999",
+                                        VALUEH >= 500000 & VALUEH <= 749999 ~ "$500,000 to $749,999",
+                                        VALUEH >= 750000 & VALUEH <= 999999 ~ "$750,000 to $999,999",
+                                        VALUEH >=  1000000  ~ "$1,000,000 or more"), levels = c("not a homeowner",
+                                                                    "Less than $50,000",
+                                                                    "$50,000 to $99,999",
+                                                                    "$100,000 to $299,999",
+                                                                    "$300,000 to $499,999",
+                                                                    "$500,000 to $749,999",
+                                                                    "$750,000 to $999,999",
+                                                                    "$1,000,000 or more")))
+```
+
+```{r}
+# SIPP
+
+sipp_us <- sipp_us %>%
+  mutate(homevalue = factor(case_when(ETENURE %in% c(2,3) ~ "not a homeowner",
+                                        THVAL_HOME < 50000 ~ "Less than $50,000",
+                                        THVAL_HOME >= 50000 & THVAL_HOME <= 99999 ~ "$50,000 to $99,999",
+                                        THVAL_HOME >= 100000 & THVAL_HOME <= 299999 ~ "$100,000 to $299,999",
+                                        THVAL_HOME >= 300000 & THVAL_HOME <= 499999 ~ "$300,000 to $499,999",
+                                        THVAL_HOME >= 500000 & THVAL_HOME <= 749999 ~ "$500,000 to $749,999",
+                                        THVAL_HOME >= 750000 & THVAL_HOME <= 999999 ~ "$750,000 to $999,999",
+                                        THVAL_HOME >=  1000000  ~ "$1,000,000 or more"), levels = c("not a homeowner",
+                                                                    "Less than $50,000",
+                                                                    "$50,000 to $99,999",
+                                                                    "$100,000 to $299,999",
+                                                                    "$300,000 to $499,999",
+                                                                    "$500,000 to $749,999",
+                                                                    "$750,000 to $999,999",
+                                                                    "$1,000,000 or more")))
+```
+
+
+
+## Variables that need imputing
+
+We move these variables to the end so that they can depend on the earlier variable transformations. We want to use complete cases for both imputations, so I impute metropolitan status first for both IPUMS and SIPP. I use a simplified version of the tenure variable - just "owned/not owned" since this is available without NA's in both surveys. 
+
+Then, I use the non-imputed metro status to predict whether homes are owned outright or owned free and clear. This way, we are not using imputed values to predict other values.
+
+#### State and Metro
+
+In the SIPP, there is a level for metro status which is "not identified." This is because SIPP identifies metro/nonmetro status when either both the metro and non-metro populations exceed 250,000 or the state is entirely metropolitan, or it is uncoded.
+
+In IPUMS, "If a county group or PUMA lies only partially within metropolitan areas or central/principal cities, then METRO indicates that the status is "indeterminable (mixed).""
+
+Since these are two different reasons for missingness, and since we are mostly trying to post-stratify to New Orleans, perhaps it is best to take out the "indeterminable" cases. However, 74,000 rows are "indeterminable" from IPUMS, and we don't have an exact match from SIPP since the SIPP samples either within or outside of metro areas.
+
+We do a K nearest neighbors (KNN) imputation for the metropolitan status that is not specified from SIPP, as well as for the "mixed" PUMAs in IPUMS that don't have a specific metro or nonmetro status assigned. We also tested hotdeck and matching, but KNN had the highest accuracy.
+
+To do the K-NN imputation, I have to convert factors into ranked categories. In SIPP, KNN predicted metro status with 80% accuracy with K = 5.
+
+
+
+```{r}
+#IPUMS
+
+
+ipums_impute_metro <-  ipums_la %>% 
+  filter(YEAR == 2018 & 
+         GQ %in% c(1, 2) &
+           RELATE == 1) %>%
+  mutate(state = STATEFIP) %>%
+  mutate(hh_income_rank = match(hh_income, levels(hh_income)),
+         edu_rank = match(edu, levels(edu)),
+         white = ifelse(race_eth == "White, non-Hispanic", 1, 0),
+         black = ifelse(race_eth == "Black, non-Hispanic", 1, 0),
+         hispanic = ifelse(race_eth == "Hispanic", 1, 0),
+         asian = ifelse(race_eth == "Asian, non-Hispanic", 1, 0),
+         other_race = ifelse(race_eth == "Other race, non-Hispanic", 1, 0),
+         own_home = ifelse(OWNERSHP == 1, 1, 0),
+         homevalue_rank = match(homevalue, levels(homevalue)),
+         self_emp = ifelse(class_worker %in% c("self employed, incorporated", "self employed, not incorporated"), 1, 0),
+         wage_salary_emp = ifelse(class_worker == "wage and salary", 1, 0),
+         not_employed = ifelse(class_worker %in% c("not employed 64 years and under", "not employed over 64 years"), 1, 0),
+         age_rank = match(age, levels(age)),
+         married_withkids = ifelse(household_type == "married with children present", 1, 0),
+         married_nokids = ifelse(household_type == "married without children", 1, 0),
+         single_withkids = ifelse(household_type == "single with children present", 1, 0),
+         single_nokids = ifelse(household_type == "single without children", 1, 0)) %>%
+  select(PERNUM,
+         SERIAL,
+         state,
+         METRO,
+         hh_income_rank,
+         male,
+         age_rank,
+         edu_rank,
+         white,
+         black,
+         hispanic,
+         asian,
+         other_race,
+         own_home,
+         homevalue_rank,
+         disability,
+         self_emp,
+         wage_salary_emp,
+         not_employed,
+         married_withkids,
+         married_nokids,
+         single_withkids,
+         single_nokids,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty) %>%
+    na.omit() %>%
+  mutate(metro_fct = factor(case_when(METRO == 0 ~ NA,
+                           METRO %in% c(2, 3, 4) ~ "metro",
+                           METRO == 1 ~ "nonmetro")))
+
+#knn impute
+ipums_impute_metro <- VIM::kNN(ipums_impute_metro, variable = "metro_fct") 
+```
+
+
+```{r}
+ipums_la <- ipums_la %>% 
+  left_join(ipums_impute_metro) %>%
+  mutate(metro = factor(case_when(metro_fct == "metro" ~ 1,
+                           metro_fct != "metro" ~ 0)))
+```
+
+For the K-NN imputation, I need to convert any ordinal factor variables to numeric ranks, or make dummy variables for categorical variables. I also have to drop NAs from predictor variables, so you see me coding the 0's in metro status after I prepare the data for the imputation.
+
+```{r}
+#SIPP
+
+sipp_us <- sipp_us %>% mutate(state = TEHC_ST)
+
+impute_vars <- sipp_us %>%
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2)) %>%
+  mutate(TEHC_METRO = TEHC_METRO,
+         hh_income_rank = match(hh_income, levels(hh_income)),
+         edu_rank = match(edu, levels(edu)),
+         white = ifelse(race_eth == "White, non-Hispanic", 1, 0),
+         black = ifelse(race_eth == "Black, non-Hispanic", 1, 0),
+         hispanic = ifelse(race_eth == "Hispanic", 1, 0),
+         asian = ifelse(race_eth == "Asian, non-Hispanic", 1, 0),
+         other_race = ifelse(race_eth == "Other race, non-Hispanic", 1, 0),
+         own_home = ifelse(ETENURE == 1, 1, 0),
+         homevalue_rank = match(homevalue, levels(homevalue)),
+         self_emp = ifelse(class_worker %in% c("self employed, incorporated", "self employed, not incorporated"), 1, 0),
+         wage_salary_emp = ifelse(class_worker == "wage and salary", 1, 0),
+         not_employed = ifelse(class_worker %in% c("not employed 64 years and under", "not employed over 64 years"), 1, 0),
+         age_rank = match(age, levels(age)),
+         married_withkids = ifelse(household_type == "married with children present", 1, 0),
+         married_nokids = ifelse(household_type == "married without children", 1, 0),
+         single_withkids = ifelse(household_type == "single with children present", 1, 0),
+         single_nokids = ifelse(household_type == "single without children", 1, 0)) %>%
+  select(SSUID,
+         SHHADID,
+         state,
+         TEHC_METRO,
+         hh_income_rank,
+         male,
+         age_rank,
+         edu_rank,
+         white,
+         black,
+         hispanic,
+         asian,
+         other_race,
+         own_home,
+         homevalue_rank,
+         disability,
+         self_emp,
+         wage_salary_emp,
+         not_employed,
+         married_withkids,
+         married_nokids,
+         single_withkids,
+         single_nokids,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty) %>%
+  na.omit() %>%
+  mutate(metro_fct = factor(case_when(TEHC_METRO == 1 ~ "metro",
+                               TEHC_METRO == 2 ~ "nonmetro",
+                               TEHC_METRO == 0 ~ NA,
+                               T ~ as.character(TEHC_METRO)))) 
+
+#knn impute
+impute_vars <- VIM::kNN(impute_vars, variable = "metro_fct") 
+```
+
+
+```{r}
+impute_vars <- impute_vars %>% select(SSUID, SHHADID, metro_fct)
+
+sipp_us <- sipp_us   %>%
+  left_join(impute_vars) %>%
+  mutate(metro = factor(case_when(metro_fct == "metro" ~ 1,
+                           metro_fct == "nonmetro" ~ 0,
+                           is.na(metro_fct) & as.integer(TEHC_METRO) == 1 ~ 1,
+                           is.na(metro_fct) & as.integer(TEHC_METRO) == 2 ~ 0))) 
+```
+
+```{r}
+sipp_us %>% filter(is.na(metro)) %>%
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2)) %>%
+  drop_na(SSUID,
+         SHHADID,
+         state,
+         TEHC_METRO,
+         hh_income,
+         male,
+         age,
+         edu,
+         race_eth,
+         ETENURE,
+         homevalue,
+         disability,
+         class_worker,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty) %>%
+  select(SSUID,
+         SHHADID,
+         MONTHCODE,
+         state,
+         TEHC_METRO,
+         hh_income,
+         male,
+         age,
+         edu,
+         race_eth,
+         ETENURE,
+         homevalue,
+         disability,
+         class_worker,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty, TEHC_METRO, metro_fct, metro)
+```
+
+
+#### Tenure
+
+In SIPP, tenure has some weird missing data. There are 32k missing values for tenure (in the individual-level data) because there are missing values for "EPRDEBT" even when ETENURE == 1. In SIPP, it shows that this is just plain missing with the APRDEBT code == 0.
+
+I'm creating a model for predicting/imputing missing values. One concern is... why didn't SIPP impute this? 
+
+Using KNN to impute tenure as well. In SIPP, this was 98% accurate.
+
+```{r}
+# IPUMS
+ipums_la <- ipums_la %>%
+  mutate(tenure = factor(case_when(OWNERSHPD == 12 ~ "owned free and clear",
+                                       OWNERSHPD == 13 ~ "owned with mortgage or loan",
+                                       OWNERSHPD %in% c(21,22) ~ "not owned"),
+                             levels = c("owned free and clear", "owned with mortgage or loan", "not owned")))
+```
+
+
+In SIPP, what we really need to impute for SIPP is "EPRDEBT", which is "Whether there were any mortgages or loans against the primary residence as of December of the reference period" and 1 = Yes, 2 = No.
+
+Once this variable is imputed, we can create our tenure variable.
+```{r}
+# SIPP
+
+
+sipp_us <- sipp_us %>% 
+  mutate(owned_withdebt = factor(case_when(EPRDEBT == 1 ~ "1", #Yes there were mortgages or loans against the residence
+                                       EPRDEBT == 2 ~ "0", # No there were not mortgages or loans against the residence
+                                       is.na(EPRDEBT) ~ "NA")))
+
+impute_tenure <- sipp_us %>%
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2) & ETENURE == 1) %>%
+  
+  mutate(hh_income_rank = match(hh_income, levels(hh_income)),
+         edu_rank = match(edu, levels(edu)),
+         white = ifelse(race_eth == "White, non-Hispanic", 1, 0),
+         black = ifelse(race_eth == "Black, non-Hispanic", 1, 0),
+         hispanic = ifelse(race_eth == "Hispanic", 1, 0),
+         asian = ifelse(race_eth == "Asian, non-Hispanic", 1, 0),
+         other_race = ifelse(race_eth == "Other race, non-Hispanic", 1, 0),
+         homevalue_rank = match(homevalue, levels(homevalue)),
+         self_emp = ifelse(class_worker %in% c("self employed, incorporated", "self employed, not incorporated"), 1, 0),
+         wage_salary_emp = ifelse(class_worker == "wage and salary", 1, 0),
+         not_employed = ifelse(class_worker %in% c("not employed 64 years and under", "not employed over 64 years"), 1, 0),
+         age_rank = match(age, levels(age)),
+         married_withkids = ifelse(household_type == "married with children present", 1, 0),
+         married_nokids = ifelse(household_type == "married without children", 1, 0),
+         single_withkids = ifelse(household_type == "single with children present", 1, 0),
+         single_nokids = ifelse(household_type == "single without children", 1, 0)) %>%
+  select(SSUID,
+         SHHADID,
+         state,
+         TEHC_METRO,
+         hh_income_rank,
+         male,
+         age_rank,
+         edu_rank,
+         white,
+         black,
+         hispanic,
+         asian,
+         other_race,
+         owned_withdebt,
+         disability,
+         self_emp,
+         wage_salary_emp,
+         not_employed,
+         married_withkids,
+         married_nokids,
+         single_withkids,
+         single_nokids,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty) %>%
+  na.omit() %>%
+  mutate(owned_withdebt = as.integer(ifelse(owned_withdebt == "NA", NA, owned_withdebt))) #here, the 0 and 1 get turned into a 1 and a 2.
+
+#knn impute
+impute_tenure <- VIM::kNN(impute_tenure, variable = "owned_withdebt") #This imputes owned_withdebt to be 1 or 2. This is a confusing step. owned_withdebt == 0 -> 1 and owned_withdebt == 1 -> 2. So, when owned_withdebt == 1, it means it is owned free and clear, and when owned_withdebt == 2 , it is owned with a mortgage or loan. 
+
+impute_tenure <- impute_tenure %>% select(SSUID, SHHADID, owned_withdebt)
+
+sipp_us <- sipp_us %>%
+  select(-c(owned_withdebt)) %>%
+  left_join(impute_tenure) %>%
+  mutate(tenure = factor(case_when(ETENURE == 1 & owned_withdebt == 1 ~ "owned free and clear", #this used to be owned_withdebt == 0, so no debt.
+                                        ETENURE == 1 & owned_withdebt == 2 ~ "owned with mortgage or loan",
+                                        ETENURE %in% c(2,3) ~ "not owned"),
+                             levels = c("owned free and clear", "owned with mortgage or loan", "not owned")))
+```
+
+
+## Creating IPUMS post stratification table
+
+Here, I subset to householders only, exclude group quarters, and only use 2018. The year can be changed later if desired. Group by everything but the weight column, then sum the weight column to create cell-level weights.
+
+```{r}
+ipums_post_strat <- ipums_la %>%
+  filter(YEAR == 2018 & 
+         GQ %in% c(1, 2) &
+           RELATE == 1) %>%
+  select(PUMA,
+         COUNTYFIP,
+         state,
+         metro,
+         hh_income,
+         male,
+         age,
+         edu,
+         race_eth,
+         tenure,
+         homevalue,
+         disability,
+         class_worker,
+         citizen,
+         household_type,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty,
+         HHWT) %>%
+  group_by(across(-c(HHWT))) %>%
+  dplyr::summarize(WGT = sum(HHWT)) %>%
+  ungroup()
+```
+
+```{r}
+summary(ipums_post_strat)
+```
+
+
+## Check Louisiana representation
+
+```{r}
+
+NOmsa.pumacodes <- c("2400","2401","2402", # Orleans
+                     "2500", # St Bernard, Plaquemines, south Jefferson
+                     "2300","2301","2302", # Jefferson
+                     "2200","2201", # St Tammany
+                     "1900") # river parishes (Includes St. James)
+```
+
+
+straight from ipums:
+
+```{r}
+race_prop_ipums <- ipums_la %>%
+  group_by(race_eth) %>%
+  dplyr::summarize(racetot = sum(HHWT)) %>%
+  mutate(totalpop = sum(racetot)) %>%
+  transmute(race_eth,
+            raceprop = racetot / totalpop) 
+
+race_prop_ipumsNOLA <- ipums_la %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  group_by(race_eth) %>%
+  dplyr::summarize(racetot = sum(HHWT)) %>%
+  mutate(totalpop = sum(racetot)) %>%
+  transmute(race_eth,
+            raceprop = racetot / totalpop) 
+```
+
+
+Directly from the IPUMS pull:
+
+```{r}
+race_prop_ipumsNOLA
+```
+
+After recoding:
+
+```{r}
+ipums_post_strat %>% ungroup() %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  group_by(race_eth) %>%
+  dplyr::summarize(racetot = sum(WGT)) %>%
+    mutate(totalpop = sum(racetot)) %>%
+    transmute(race_eth, 
+              raceprop = racetot / totalpop)
+```
+
+```{r}
+ipums_la %>% as_survey(weights = HHWT) %>%
+  group_by(race_eth) %>%
+  srvyr::summarise(survey_prop = survey_mean())
+```
+
+```{r}
+save(ipums_la, file = "outputs/ipums_la.RData")
+```
+
+
+```{r}
+ipums_post_strat <- ipums_post_strat %>% ungroup()
+```
+
+```{r}
+summary(ipums_post_strat)
+```
+
+```{r}
+#save ipums_post_strat either locally or in cloud storage, as Apr11_ipums.RData
+storage_save_rdata(ipums_post_strat, container = cont_proj, file = "Apr11_ipums.RData")
+```
+
+
+
+----------------------------------------------------------------------------------------------------------------
+# Outcome Variables - SIPP only
+
+
+Creating any asset / any debt 
+
+```{r}
+sipp_us <- sipp_us %>%
+  group_by(SSUID, SHHADID) %>%
+  mutate(EOWN_BSJ = case_when(EJB1_JBORSE == 2 | # 2 means self-employed (owns a business) There are up to 7 businesses you can list. This goes through them.
+                                EJB2_JBORSE == 2 |
+                                EJB3_JBORSE == 2 |
+                                EJB4_JBORSE == 2 |
+                                EJB5_JBORSE == 2 |
+                                EJB6_JBORSE == 2 |
+                                EJB7_JBORSE == 2 ~ 1)) %>% ungroup()
+
+sipp_us <- sipp_us %>% #first do person-level, then roll up to HH
+  mutate(pp_any_debt = case_when(MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   (EDEBT_CC == 1 |
+                                      EDEBT_MED == 1 |
+                                      EDEBT_ED == 1 |
+                                      EDEBT_OT == 1 |
+                                      EPRDEBT == 1 |
+                                      EMHDEBT == 1 |
+                                      EVEH1DEBT == 1 |
+                                      EVEH2DEBT == 1 |
+                                      EVEH3DEBT == 1 |
+                                      EMCYCDEBT == 1 |
+                                      EBOATDEBT == 1 |
+                                      ERVDEBT == 1 |
+                                      EORECDEBT == 1 |
+                                      TDEBT_BUS > 0) ~ 1,
+                                 T ~ 0),
+         pp_any_asset = case_when(MONTHCODE == 12 &
+                                    (TLIVQTR %in% c(1,2)) &
+                                    (EOWN_TREQ == 1 |
+                                       EOWN_ANNEQ == 1 |
+                                       EOWN_BSI == 1 |
+                                       EOWN_BSJ == 1 |
+                                       EOWN_CD == 1 |
+                                       EOWN_CHK == 1 |
+                                       EOWN_GOVS == 1 |
+                                       EOWN_IRAKEO == 1 |
+                                       (EOWN_LIFE == 1 & ELIFE_TYPE == 1) |
+                                       EOWN_MCBD == 1 |
+                                       EOWN_MF == 1 |
+                                       EOWN_MM == 1 |
+                                       EOWN_OINV == 1 |
+                                       EOWN_RE == 1 |
+                                       EOWN_RP == 1 |
+                                       EOWN_SAV == 1 |
+                                       EOWN_ST == 1 |
+                                       EOWN_THR401 == 1 |
+                                       EOWN_ESAV == 1 |
+                                       EOWN_RECV == 1 |
+                                       (EOWN_VEH == 1 & TVEH_NUM > 0) |
+                                       ETENURE == 1) ~ 1,
+                                  T ~ 0)) %>%
+  group_by(SSUID, SHHADID) %>% #rolling up to household 
+  mutate(sum_pp_debt = sum(pp_any_debt, na.rm = T),
+         hh_any_debt = factor(case_when(MONTHCODE == 12 & 
+                                   TLIVQTR %in% c(1,2) &
+                                   ERELRPE %in% c(1,2) &
+                                   sum_pp_debt > 0 &
+                                     THDEBT_AST > 0 ~ 1,
+                                 T ~ 0)),
+         sum_pp_asset = sum(pp_any_asset, na.rm = T),
+         hh_any_asset = factor(case_when(MONTHCODE == 12 & 
+                                    TLIVQTR %in% c(1,2) &
+                                    ERELRPE %in% c(1,2) &
+                                    sum_pp_asset > 0 &
+                                     THVAL_AST > 0 ~ 1,
+                                  T ~ 0))) %>%
+  ungroup()
+         
+```
+
+BWDC guidance (from talking with people at SIPP) said to filter out >99th percentile of the household assets, debts, and income. However, since we use a percent rank model, I choose to keep these people in the data. Since the top of the distribution might not be representative, I topcode the top to exactly the 99th percentile. This prevents some weird outliers where people with assets and debts >99th percentile have debts that supremely outweight their assets, and have ultra-rich people with the most extreme negative net worth.
+
+```{r}
+#creating 99th percentiles
+
+svy_data <-  sipp_us %>%
+  as_survey_rep(weights = WPFINWGT,
+                repweights = REPWGT0:REPWGT240,
+                type = "BRR")
+
+asset_q <- svy_data %>%
+  filter(ERELRPE %in% c(1,2) & MONTHCODE == 12 & TLIVQTR %in% c(1,2) & hh_any_asset == 1) %>%
+  srvyr::summarize(asset = survey_quantile(THVAL_AST, .99))
+
+debt_q <- svy_data %>%
+  filter(ERELRPE %in% c(1,2) & MONTHCODE == 12 & TLIVQTR %in% c(1,2) & hh_any_debt == 1) %>%
+  srvyr::summarize(debt = survey_quantile(THDEBT_AST, .99))
+```
+
+
+
+
+
+### Assets (and assets by type)
+
+check to make sure that everyone with value of assets == 0 have "hh_any_asset" == 0 and no one with hh_any_asset or hh_any_debt have values equal to 0.
+
+```{r}
+sipp_us <- sipp_us %>% 
+  mutate(hh_assets = case_when(ERELRPE %in% c(1,2) &
+                                 MONTHCODE == 12 &
+                                 TLIVQTR %in% c(1,2) &
+                                 hh_any_asset == 1 &
+                                 THVAL_AST < asset_q$asset_q99  ~ THVAL_AST,
+                               ERELRPE %in% c(1,2) &
+                                 MONTHCODE == 12 &
+                                 TLIVQTR %in% c(1,2) &
+                                 hh_any_asset == 1 &
+                                 THVAL_AST >= asset_q$asset_q99 ~ asset_q$asset_q99),
+         assets_bank = case_when(ERELRPE %in% c(1,2) &
+                                   MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 ~ THVAL_BANK),
+         assets_bond = case_when(ERELRPE %in% c(1,2) &
+                                   MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 ~ THVAL_BOND),
+         assets_stock = case_when(ERELRPE %in% c(1,2) &
+                                    MONTHCODE == 12 &
+                                    TLIVQTR %in% c(1,2) &
+                                    hh_any_asset == 1 ~ THVAL_STMF),
+         assets_rent = case_when(ERELRPE %in% c(1,2) &
+                                   MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 ~ THVAL_RENT),
+         assets_realest = case_when(ERELRPE %in% c(1,2) &
+                                   MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 ~ THVAL_RE),
+         assets_bus = case_when(ERELRPE %in% c(1,2) &
+                                   MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 ~ THVAL_BUS),
+         assets_home = case_when(ERELRPE %in% c(1,2) &
+                                   MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 ~ THVAL_HOME),
+         assets_ret = case_when(ERELRPE %in% c(1,2) &
+                                   MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 ~ THVAL_RET),
+         
+         assets_veh = case_when(ERELRPE %in% c(1,2) &
+                                   MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 ~ THVAL_VEH),
+         
+         assets_esav = case_when(ERELRPE %in% c(1,2) &
+                                   MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 ~ THVAL_ESAV),
+         
+         assets_oth = case_when(ERELRPE %in% c(1,2) &
+                                   MONTHCODE == 12 &
+                                   TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 ~ THVAL_OTH))
+```
+
+
+### Debts (and debts by type)
+
+Only some of the debt types are already broken out for the household. Medical debt and business debts are some that I have to manually roll up. Note that medical debt at the individual level is only reported for household members older than 15 and in month 12. Business debts are for businesses as jobs and businesses as investments. 
+
+```{r}
+#rolling up debt types to the household level
+
+sipp_us <- sipp_us %>%
+  group_by(SSUID, SHHADID) %>% #rolling up to household 
+  mutate(TORPDEBTVAL_hh = case_when(hh_any_debt == 1 ~ sum(TORPDEBTVAL, na.rm = T)),
+         business_job_pp =  case_when(hh_any_debt == 1 ~ TBSJ1DEBTVAL + TBSJ2DEBTVAL + TBSJ3DEBTVAL + TBSJ4DEBTVAL + TBSJ5DEBTVAL),
+         business_job_debts = sum(business_job_pp, na.rm = T),
+         
+         business_invest_pp = case_when(hh_any_debt == 1 ~ TBSI1DEBTVAL + TBSI2DEBTVAL + TBSI3DEBTVAL),
+         business_invest_debts = sum(business_invest_pp, na.rm = T),
+         
+         medical_debt_pp = case_when(TAGE >= 15 &
+                                       MONTHCODE == 12 ~ TMED_AMT),
+         medical_debt_hh = sum(medical_debt_pp, na.rm = T)) %>%
+  ungroup()
+
+sipp_us <- sipp_us %>% 
+  mutate(hh_debts = case_when(ERELRPE %in% c(1,2) &
+                                MONTHCODE == 12 &
+                                TLIVQTR %in% c(1,2) &
+                                hh_any_debt == 1 &
+                                THDEBT_AST < debt_q$debt_q99 ~ THDEBT_AST,
+                              ERELRPE %in% c(1,2) &
+                                MONTHCODE == 12 &
+                                TLIVQTR %in% c(1,2) &
+                                hh_any_debt == 1 &
+                                THDEBT_AST >= debt_q$debt_q99 ~ debt_q$debt_q99)) %>%
+  group_by(SSUID, SHHADID) %>%
+  mutate(debt_home = case_when(ERELRPE %in% c(1,2) &
+                                     MONTHCODE == 12 &
+                                     TLIVQTR %in% c(1,2) &
+                                     hh_any_debt == 1 ~ THDEBT_HOME),
+         debt_CC = case_when(ERELRPE %in% c(1,2) &
+                                     MONTHCODE == 12 &
+                                     TLIVQTR %in% c(1,2) &
+                                     hh_any_debt == 1 ~ THDEBT_CC),
+         debt_medical = case_when(ERELRPE %in% c(1,2) &
+                                     MONTHCODE == 12 &
+                                     TLIVQTR %in% c(1,2) &
+                                     hh_any_debt == 1 ~ medical_debt_hh),
+         debt_edu = case_when(ERELRPE %in% c(1,2) &
+                                     MONTHCODE == 12 &
+                                     TLIVQTR %in% c(1,2) &
+                                     hh_any_debt == 1 ~ THDEBT_ED),
+         debt_oth = case_when(ERELRPE %in% c(1,2) &
+                                     MONTHCODE == 12 &
+                                     TLIVQTR %in% c(1,2) &
+                                     hh_any_debt == 1 ~ THDEBT_OT),
+         debt_business = case_when(ERELRPE %in% c(1,2) &
+                                     MONTHCODE == 12 &
+                                     TLIVQTR %in% c(1,2) &
+                                     hh_any_debt == 1 ~ business_job_debts + business_invest_debts),
+         secured_debts = case_when(ERELRPE %in% c(1,2) &
+                                     MONTHCODE == 12 &
+                                     TLIVQTR %in% c(1,2) &
+                                     hh_any_debt == 1 ~ 
+                                     THDEBT_SEC),
+         unsecured_debts = case_when(ERELRPE %in% c(1,2) &
+                                       MONTHCODE == 12 &
+                                       TLIVQTR %in% c(1,2) &
+                                       hh_any_debt == 1 ~ THDEBT_USEC)) %>%
+    ungroup()
+```
+
+### Net Worth
+
+```{r}
+sipp_us <- sipp_us %>% 
+  mutate(hh_any_wealth = factor(case_when((ERELRPE %in% c(1,2) &
+                                     MONTHCODE == 12 &
+                                     TLIVQTR %in% c(1,2)) &
+                                     (hh_any_asset == 1 |
+                                     hh_any_debt == 1 )~ 1,
+                                   T ~ 0)),
+         hh_networth = case_when(ERELRPE %in% c(1,2) &
+                                 MONTHCODE == 12 &
+                                 TLIVQTR %in% c(1,2) &
+                                   hh_any_asset == 1 &
+                                   hh_any_debt == 1 ~ hh_assets - hh_debts,
+                               ERELRPE %in% c(1,2) &
+                                     MONTHCODE == 12 &
+                                     TLIVQTR %in% c(1,2) &
+                                     hh_any_asset == 1 &
+                                     hh_any_debt == 0 ~ hh_assets - 0,
+                               ERELRPE %in% c(1,2) &
+                                     MONTHCODE == 12 &
+                                     TLIVQTR %in% c(1,2) &
+                                     hh_any_asset == 0 &
+                                     hh_any_debt == 1 ~ 0 - hh_debts))
+```
+
+```{r}
+sipp_us_save <- sipp_us %>%
+                     select(SSUID, SHHADID, ERELRPE, MONTHCODE, TLIVQTR, 
+         state,
+         metro,
+         hh_income,
+         male,
+         age,
+         edu,
+         race_eth,
+         tenure,
+         homevalue,
+         disability,
+         class_worker,
+         household_type,
+         citizen,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty,
+         hh_any_asset,
+         hh_any_debt,
+         hh_any_wealth,
+         hh_assets,
+         hh_debts,
+         hh_networth,
+         WPFINWGT,
+         REPWGT0:REPWGT240)
+
+storage_save_rdata(sipp_us_save, container = cont_proj, file = "April11_USsipp.RData")
+```
+
+
+
+
+# Creating Model  data
+
+We will specify 3 different outcome models: one for assets, one for debts, and one for net worth.
+
+For each of these, the outcome is the percent rank.
+
+Need to filter to the household level, not living quarters. 
+
+```{r}
+sipp_model <- sipp_us %>%
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2)) %>%
+  select(state,
+         metro,
+         hh_income,
+         male,
+         age,
+         edu,
+         race_eth,
+         tenure,
+         homevalue,
+         disability,
+         class_worker,
+         household_type,
+         citizen,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty,
+         hh_any_asset,
+         hh_any_debt,
+         hh_any_wealth,
+         hh_assets,
+         hh_debts,
+         hh_networth,
+         WPFINWGT) 
+```
+
+
+###  Checking for NA's 
+
+```{r}
+summary(sipp_model)
+```
+
+
+## Checking asset/debt percents?
+
+```{r}
+sipp_svy <- sipp_model %>%
+  as_survey_rep(weights = WPFINWGT,
+                repweights = REPWGT0:REPWGT240,
+                type = "BRR")
+```
+
+
+## Creating percent rank
+
+```{r}
+
+#assets
+wtd_assets <- sipp_model %>% 
+  drop_na(hh_assets) %>%
+  arrange(hh_assets) %>%
+  mutate(prank_assets = lag(cumsum(WPFINWGT), default = 0) / (sum(WPFINWGT) - 1)) 
+
+sipp_model <- sipp_model %>% left_join(wtd_assets)
+
+```
+
+```{r}
+#debts
+
+wtd_debts <- sipp_model  %>%
+  drop_na(hh_debts) %>%
+  arrange(hh_debts) %>%
+  mutate(prank_debts = lag(cumsum(WPFINWGT), default = 0) / (sum(WPFINWGT) - 1)) 
+
+sipp_model <- sipp_model %>% left_join(wtd_debts)
+
+```
+
+```{r}
+#net worth 
+wtd_wealth <- sipp_model %>%
+  drop_na(hh_networth) %>%
+  arrange(hh_networth) %>%
+  mutate(prank_networth = lag(cumsum(WPFINWGT), default = 0) / (sum(WPFINWGT) - 1)) 
+
+sipp_model <- sipp_model %>% left_join(wtd_wealth)
+
+```
+
+```{r}
+summary(sipp_model)
+```
+
+
+## Saving to azure
+
+```{r}
+storage_save_rdata(sipp_model, container = cont_proj, file = "April11_modelvars.RData")
+```
+
+## Checking that the levels of all variables are identical between surveys:
+
+```{r}
+compare_sipp <- sipp_model %>% select(-c(hh_any_asset:prank_networth))
+compare_ipums <- ipums_post_strat
+```
+
+```{r}
+for( i in colnames(compare_sipp)){
+   print(paste0(i,": ", levels(compare_sipp[[i]]) == levels(compare_ipums[[i]])))
+  
+}
+```
+

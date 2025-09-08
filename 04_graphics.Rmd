@@ -1,0 +1,860 @@
+---
+title: "04_graphics"
+author: "Haleigh Tomlin"
+date: "2024-03-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file depends on:
+
+01_libraries_functions.R
+03b_poststrat.Rmd
+
+And assumes that all models from 03a_models.Rmd have been tested properly in model_validation.Rmd
+
+These are the final brief draft graphics.
+
+```{r}
+source(here("inputs/datacenter_colors.R"))
+```
+
+
+```{r}
+#Create survey objects using the SIPP data
+storage_load_rdata(container = cont_proj, file = "April11_USsipp.RData")
+sipp_us <- sipp_us_save
+load("outputs/ipums_expanded_full.RData")
+load("outputs/ipums_la.RData")
+
+
+sipp18US_svy <- sipp_us  %>%
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2)) %>%
+  as_survey_rep(weights = WPFINWGT,
+                repweights = REPWGT0:REPWGT240,
+                type = "BRR")
+
+
+sipp18La_svy <- sipp_us  %>%
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2)) %>%
+  filter(state == 22) %>%
+  as_survey_rep(weights = WPFINWGT,
+                repweights = REPWGT0:REPWGT240,
+                type = "BRR")
+
+```
+
+
+```{r}
+# The graphics are created using the expanded predicted ipums data for the full state.
+
+#assigning DC brand colors
+LA_prediction_imputed <- ipums_expanded_full %>%
+  mutate(race_DCcolors = case_when(grepl("White", race_eth) ~ DCcolor.p2limegreen,
+                                     grepl("Black", race_eth) ~ DCcolor.p1darkblue,
+                                     race_eth == "Hispanic" ~ DCcolor.p3yellowochre,
+                                     grepl("Asian", race_eth) ~ DCcolor.p2orangered,
+                                     grepl("Other", race_eth) ~ DCcolor.p1skyblue),
+         race_DCcolors60 = case_when(grepl("White", race_eth) ~ DCcolor.p2limegreen60,
+                                     grepl("Black", race_eth) ~ DCcolor.p1darkblue60,
+                                     race_eth == "Hispanic" ~ DCcolor.p3yellowochre60,
+                                     grepl("Asian", race_eth) ~ DCcolor.p2orangered60,
+                                     grepl("Other", race_eth) ~ DCcolor.p1skyblue60))
+
+race_DCcolors <- as.character(LA_prediction_imputed$race_DCcolors)
+names(race_DCcolors) <- as.character(LA_prediction_imputed$race_eth)
+
+race_DCcolors60 <- as.character(LA_prediction_imputed$race_DCcolors60)
+names(race_DCcolors60) <- as.character(LA_prediction_imputed$race_eth)
+```
+
+```{r}
+NOmsa.pumacodes <- c("2400","2401","2402", # Orleans
+                     "2500", # St Bernard, Plaquemines, south Jefferson
+                     "2300","2301","2302", # Jefferson
+                     "2200","2201", # St Tammany
+                     "1900") # river parishes (Includes St. James)
+```
+
+
+```{r}
+#load in ipums hh data to get general demographics to add details on plots
+#This is just straight up 2018 ipums household data - nothing has been dropped to create the post-stratification table.
+
+ipums_full <- storage_read_csv(container = cont_proj, file = "ipums_hh.csv")
+
+race_prop_ipums <- ipums_full %>%
+  group_by(race_eth) %>%
+  dplyr::summarize(racetot = sum(HHWT)) %>%
+  mutate(totalpop = sum(racetot)) %>%
+  transmute(race_eth,
+            raceprop = racetot / totalpop) 
+
+race_prop_ipumsNOLA <- ipums_full %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  group_by(race_eth) %>%
+  dplyr::summarize(racetot = sum(HHWT)) %>%
+  mutate(totalpop = sum(racetot)) %>%
+  transmute(race_eth,
+            raceprop = racetot / totalpop) 
+
+local_hh <- ipums_full %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  dplyr::summarize(tothh = sum(HHWT))
+```
+
+
+
+### SCF National Plots
+
+```{r}
+load("outputs/scf_quintiles.RData")
+load("outputs/scf_race.RData")
+```
+
+
+```{r, fig.height = 4, fig.width = 7}
+
+scf.quintiles.labels <- scf.quintiles %>% 
+  filter(year %in% c(1989, 2022),
+         measure == "median") %>% 
+  mutate(value = round(value),
+         value_lab = dollar(value))
+
+# 
+scf.quantileMedianHistory.plot <- 
+  scf.quintiles %>% 
+  mutate(key = factor(key),
+         key = fct_rev(key)) %>% 
+  mutate(value = ifelse(is.na(value), .05, value)) %>% 
+  filter(measure == "median") %>% 
+  mutate(key = factor(key, ordered = T),
+         key = fct_relevel(key, "Less than 25", "25–49.9", "50–74.9", "75–89.9", "90–100")) %>%
+  #mutate(key = factor(key, ordered = T, levels = c("less than 25", "25-49.9", "50-74.9", "75-89.9", "90-100")))
+  ggplot(aes(x = year, y = value)) + 
+  geom_line(aes(color = key, group = key)) +
+  
+  geom_text(
+    aes(label = value_lab, hjust = 1.1, y = value + 90), data = subset(scf.quintiles.labels, year == 1989 & key != "Less than 25"),
+    family ="Asap", size = 3) +
+  
+    geom_text(
+    aes(label = value_lab, hjust = 0, y = value + 75), data = subset(scf.quintiles.labels, year == 2022 & key != "Less than 25"),
+    family ="Asap", size = 3) +
+  
+    geom_text(
+    aes(label = value_lab, hjust = 1.1), data = subset(scf.quintiles.labels, year == 1989 & key == "Less than 25"),
+    family ="Asap", size = 3) +
+  
+    geom_text(
+    aes(label = value_lab, hjust = 0), data = subset(scf.quintiles.labels, year == 2022 & key == "Less than 25"),
+    family ="Asap", size = 3) +
+
+  scale_color_manual(values = c(DCcolor.p2limegreen, DCcolor.p2green, DCcolor.p2teal, DCcolor.p2blue, DCcolor.p1darkblue)) + 
+  scale_y_continuous(labels = scales::comma, limits = c(0, 4000)) + 
+  guides(color=guide_legend(title="Percentile", reverse = T)) + 
+  themeDC_horizontal() +
+  labs(title = "Median net worth by percentile, 1989-2022",
+       subtitle = "United States",
+       y = "Median net worth (in thousands of 2022 dollars)",
+       x = "",
+       caption = "Source: Survey of Consumer Finances, Historic Tables") +
+  coord_cartesian(clip = "off")
+
+scf.quantileMedianHistory.plot
+
+ggsave(scf.quantileMedianHistory.plot, filename = "outputs/SCF-US-quantilesHistory.png", width = 7, height = 4)
+
+```
+
+```{r}
+## Difference in median net worth
+
+scf.race <- scf.race %>%
+  mutate(key = case_when(grepl("Bl", key) ~ "Black or African-American non-Hispanic",
+                         T ~ key))
+
+# For labels
+scf.race.labels <- scf.race %>% 
+  filter(year %in% c(1989, 2022),
+         measure == "median") %>% 
+  mutate(value = round(value),
+         value_lab = dollar(value),
+         key = factor(key, levels = c("White non-Hispanic", "Other or Multiple Race", "Hispanic or Latino", "Black or African-American non-Hispanic"))) 
+
+
+scf.raceMedianDifferenceHistory.plot <-
+  scf.race %>%
+  filter(measure == "median") %>%
+  group_by(year) %>%
+  ggplot(aes(year, value)) +
+  geom_line(aes(color = forcats::fct_rev(key), group = key)) +
+    geom_text_repel(
+    aes(label = value_lab), data = scf.race.labels,
+    family ="Asap", size = 3,
+    direction = "y", force = 1.5
+    ) +
+  scale_color_manual(values = c(DCcolor.p2limegreen80,
+                                DCcolor.p1skyblue80,
+                                DCcolor.p3yellowochre80,
+                                DCcolor.p1darkblue80),
+                    guide = guide_legend(reverse = F)) +
+  scale_y_continuous(labels = scales::comma, limits = c(0, 300)) +
+  guides(color=guide_legend(title="")) +
+  themeDC_horizontal() +
+  labs(title = "Median net worth by race/ethnicity, 1989-2022",
+       subtitle = "United States",
+       y = "Median net worth (in thousands of 2022 dollars)",
+       x = "",
+       caption = "Source: Survey of Consumer Finances, Historic Tables") +
+  coord_cartesian(clip = "off")
+scf.raceMedianDifferenceHistory.plot
+
+ggsave(scf.raceMedianDifferenceHistory.plot, filename = "outputs/SCF-US-race-medianHistory.png", width = 7, height = 4)
+
+```
+
+
+
+
+### New Orleans quantile plot by race/ethnicity
+
+```{r, fig.height = 4, fig.width = 7}
+
+NOLA_race <- ps_dataprep(LA_prediction_imputed %>% 
+                           filter(PUMA %in% NOmsa.pumacodes), quo(race_eth), quo(networth)) %>% 
+  mutate(comp = "", var = substr(var, 2,3),
+         group = factor(group, levels = c("White, non-Hispanic", "Hispanic", "Black, non-Hispanic", "Asian, non-Hispanic", "Other race, non-Hispanic"))) %>%
+  arrange(group)
+ps_race <- ps_dataprep(LA_prediction_imputed, quo(race_eth), quo(networth)) %>% mutate(var = substr(var, 2, 3))
+
+ps_raceLA <- ps_race %>% mutate(comp = "Louisiana",
+                                var = substr(var, 2, 3)) 
+NOLArace_plot <- quantile_plot(NOLA_race, filter_vec = c("White, non-Hispanic", "Hispanic", "Black, non-Hispanic"),
+                               title = "The distribution of net worth by race",
+                               subtitle = "Greater New Orleans",
+                               x = "Percentile",
+                               y = "2018 dollars",
+                               colorlab = "") +
+  scale_y_continuous(label=dollar) +
+  labs(caption = "Source: Estimates by The Data Center, based on the 2018 Survey of Income and Program Participation\nand the 2018 American Community Survey") + 
+  themeDC_horizontal() 
+
+NOLArace_plot
+ggsave(NOLArace_plot, filename = "outputs/LA-NOLA-race-quantiles.png", width = 7, height = 4)
+```
+
+### Race/Ethnicity by level of net worth (50-40-10)
+
+```{r, fig.height = 3, fig.width = 7}
+local_quantiles <- LA_prediction_imputed %>%
+  filter((PUMA %in% NOmsa.pumacodes)) %>%
+  dplyr::summarize(Q = c("asset_q00", "asset_q50", "asset_q90", "asset_q100"),
+                   networth = quantile(networth, c(0, .5, .9, 1), na.rm = T)) %>%
+  pivot_wider(names_from = Q, values_from = networth)
+
+NOLA_MRP_ntile_breakdown <- LA_prediction_imputed %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  select(race_eth, networth) %>%
+  mutate(ntile = factor(case_when((networth < local_quantiles$asset_q50) ~ "Bottom 50%",
+                                  (networth >= local_quantiles$asset_q50 & networth < local_quantiles$asset_q90) ~ "Middle 40%",
+                        (networth >= local_quantiles$asset_q90)  ~ "Top 10%"))) %>%
+  group_by(ntile, race_eth) %>%
+  dplyr::summarize(n = n()) %>%
+  mutate(prop = n/sum(n)) %>%
+  ungroup() %>%
+  group_by(ntile) %>% 
+  mutate(ntile_tot = sum(n)) %>% na.omit() 
+
+NOLA_raceprops <- race_prop_ipumsNOLA %>% 
+  mutate(race_eth = factor(case_when(grepl("hite", race_eth) ~ "White, non-Hispanic",
+                                            grepl("lack", race_eth) ~ "Black, non-Hispanic",
+                                            grepl("ispanic", race_eth) ~ "Hispanic",
+                                            grepl("sian", race_eth) ~ "Asian, non-Hispanic",
+                                            grepl("ther", race_eth) ~ "Other race, non-Hispanic"),
+                                  levels = c("White, non-Hispanic", "Black, non-Hispanic",
+                                             "Hispanic", "Asian, non-Hispanic", "Other race, non-Hispanic"))) %>%
+  rename(prop = raceprop) %>%
+  mutate(ntile = "All households",
+         n = NA, ntile_tot = NA, group = 2) %>% select(ntile, race_eth, n, prop, ntile_tot, group) 
+
+NOLA_MRP_ntile_breakdown <- NOLA_MRP_ntile_breakdown %>%  
+  mutate(group = 1) %>%
+  rbind(NOLA_raceprops)%>%
+  mutate(ntile = factor(ntile, levels = c("All households", "Bottom 50%", "Middle 40%", "Top 10%")),
+         alpha_var = ifelse(group == 1, 1, 0.7)) 
+
+
+NOLA_dist_race <- ggplot(NOLA_MRP_ntile_breakdown, aes(ntile, prop, fill = forcats::fct_rev(race_eth), label = forcats::fct_rev(race_eth))) +
+  geom_col(stat = "identity", position = "fill", width = .7) +
+  facet_grid(group ~ .,
+             scales="free",
+             space = "free") +
+  coord_flip()+
+  theme_minimal() + 
+  geom_vline(xintercept = 0, color = "black", size = 3) +
+  scale_fill_manual(values = race_DCcolors,
+                    guide = guide_legend(reverse = T)) +
+  labs(title = "Race/Ethnicity by level of net worth",
+       subtitle = "Greater New Orleans",
+       x = "",
+       y = "",
+       fill = "",
+       caption = "Source: Estimates by The Data Center, based on the 2018 Survey of Income and Program Participation\nand the 2018 American Community Survey") + 
+  themeDC_vertical() +
+  
+  theme(axis.text.x = element_text(angle = 40, vjust = 0.9, hjust=1),
+        strip.text =  element_blank()) +
+  
+  scale_y_continuous(label = percent)
+
+
+NOLA_dist_race
+ggsave(NOLA_dist_race, filename = "outputs/NOLA-race-50-40-10.png", width = 7, height = 3)
+```
+
+
+### Age by level of net worth (50-40-10)
+
+```{r, fig.height = 3, fig.width = 7}
+
+NOLA_age_ntile_breakdown2 <- LA_prediction_imputed %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  mutate(age_bins = case_when(age %in% c("25-29", "30-34") ~ "25-34",
+                              age %in% c("35-39", "40-44") ~ "35-44",
+                              age %in% c("45-49", "50-54") ~ "45-54",
+                              age %in% c("55-59", "60-64") ~ "55-64",
+                              age %in% c("65-69", "70-74", "75-79", "80-84", "85+") ~ "65+")) %>%
+  select(age_bins, networth) %>%
+  mutate(ntile = factor(case_when((networth < local_quantiles$asset_q50) ~ "Bottom 50%",
+                                  
+                                  (networth >= local_quantiles$asset_q50 & networth < local_quantiles$asset_q90) ~ "Middle 40%",
+                                  
+                                  (networth >= local_quantiles$asset_q90)  ~ "Top 10%"))) %>%
+  group_by(ntile, age_bins) %>%
+  dplyr::summarize(n = n()) %>%
+  mutate(prop = n/sum(n)) %>% na.omit()
+
+NOLA_dist_age_bins <- ggplot(NOLA_age_ntile_breakdown2, aes(ntile, prop, fill = fct_rev(age_bins), label = age_bins)) +
+  geom_bar(stat = "identity", position = "fill") +
+  coord_flip()+
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 40, vjust = 0.9, hjust=1)) +
+  scale_fill_manual(values = rev(c(DCcolor.p2blue20,
+                                   DCcolor.p2blue40,
+                                   DCcolor.p2blue60,
+                                   DCcolor.p2blue80,
+                                   DCcolor.p2blue))) +
+  labs(title = "Age by level of net worth",
+       subtitle = "Greater New Orleans",
+       x = "",
+       y = "",
+       fill = "Age",
+       caption = "Source: Estimates by The Data Center, based on the 2018 Survey of Income and Program Participation\nand the 2018 American Community Survey") +
+  scale_y_continuous(label = percent) +
+  themeDC_vertical()
+NOLA_dist_age_bins
+
+ggsave(NOLA_dist_age_bins, filename = "outputs/NOLA-dist-age-binned-50-40-10.png", width = 7, height = 3)
+
+```
+
+### Median net worth and median income by age
+
+
+```{r, fig.height = 5, fig.width = 7}
+# Income and assets by age
+
+load("outputs/ipums_la.RData")
+ipums_hh <- ipums_la %>% filter(GQ %in% c(1, 2) &
+    RELATE == 1 & YEAR == 2018) %>%
+  select(COUNTYFIP, PUMA, state,
+         metro,
+         hh_income,
+         male,
+         age,
+         edu,
+         race_eth,
+         tenure,
+         homevalue,
+         disability,
+         class_worker,
+         citizen,
+         household_type,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty,
+         VALUEH, HHINCOME, HHWT, CLUSTER, STRATA) 
+
+ipums_NOLA_inc2 <- ipums_hh %>% as_survey_design(ids = CLUSTER,
+                                                 strata = STRATA, 
+                                                 weights = HHWT)  %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  mutate(age_10y = factor(case_when(age %in% c("15-24") ~ "15-24",
+                                    age %in% c("25-29", "30-34") ~ "25-34",
+                                    age %in% c("35-39", "40-44") ~ "35-44",
+                                    age %in% c("45-49", "50-54") ~ "45-54",
+                                    age %in% c("55-59", "60-64") ~ "55-64",
+                                    age %in% c("65-69", "70-74") ~ "65-74",
+                                    age %in% c("75-79", "80-84", "85+") ~ "75+"),
+                          levels = c("15-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"))) %>%
+  group_by(age_10y, race_eth) %>%
+  srvyr::summarize(med_inc = survey_old_median(HHINCOME, na.rm = T)) %>% na.omit()
+
+ipums_NOLA_inc2 <- LA_prediction_imputed %>%
+  mutate(age_10y = factor(case_when(age %in% c("15-24") ~ "15-24",
+                                    age %in% c("25-29", "30-34") ~ "25-34",
+                                    age %in% c("35-39", "40-44") ~ "35-44",
+                                    age %in% c("45-49", "50-54") ~ "45-54",
+                                    age %in% c("55-59", "60-64") ~ "55-64",
+                                    age %in% c("65-69","70-74") ~ "65-74",
+                                    age %in% c("75-79", "80-84", "85+") ~ "75+"),
+                          levels = c("15-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+")))%>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  left_join(ipums_NOLA_inc2, by = c("age_10y", "race_eth")) %>%
+  select(age_10y, med_inc, networth, race_eth) %>%
+  group_by(age_10y, med_inc, race_eth) %>%
+  dplyr::summarize(med_networth = median(networth, na.rm = T)) %>%
+  pivot_longer(cols = c(med_inc, med_networth), names_to = "var", values_to = "val") %>%
+  filter(race_eth %in% c("White, non-Hispanic", "Black, non-Hispanic")) %>%
+  mutate(var = case_when(grepl("inc", var) ~ "Median Income",
+                         grepl("hv", var) ~ "Median Home Value",
+                         grepl("networth", var) ~ "Median Net Worth")) %>% na.omit()
+
+NOLA_inc_age_assets <- ggplot(ipums_NOLA_inc2,
+       aes(x = age_10y, y = val, color = var, group = var)) +
+  geom_point() + 
+  geom_line() +
+  facet_wrap(~race_eth, ncol = 1) +
+  labs(title = "Median net worth and median income by age",
+       subtitle = "Greater New Orleans",
+       x = "Age",
+       y = "2018 dollars",
+       caption = "Source: Estimates by The Data Center, based on the 2018 Survey of Income and Program Participation\nand the 2018 American Community Survey") +
+  facet_wrap(~race_eth, ncol = 1, scales = "free") +
+  themeDC_horizontal() +
+  theme(legend.title = element_blank(),
+        panel.spacing = unit(2, "lines")) +
+  scale_y_continuous(label = dollar, limits = c(-3000, 450000)) +
+  scale_color_manual(values = c(DCcolor.p1mediumblue, DCcolor.p2violet))
+
+NOLA_inc_age_assets
+ggsave(NOLA_inc_age_assets, file = "outputs/NOLA-income-age-assets.png", width = 7, height = 5)
+
+```
+
+```{r}
+#sipp
+inc_sipp <- sipp_us %>%
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2)) %>%
+  as_survey(weights = WPFINWGT,
+                repweights = REPWGT1:REPWGT240,
+                type = "BRR") %>%
+mutate(age_10y = factor(case_when(age %in% c("15-24") ~ "15-24",
+                                    age %in% c("25-29", "30-34") ~ "25-34",
+                                    age %in% c("35-39", "40-44") ~ "35-44",
+                                    age %in% c("45-49", "50-54") ~ "45-54",
+                                    age %in% c("55-59", "60-64") ~ "55-64",
+                                    age %in% c("65-69", "70-74") ~ "65-74",
+                                    age %in% c("75-79", "80-84", "85+") ~ "75+"),
+                          levels = c("15-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"))) %>%
+  group_by(age_10y) %>%
+  srvyr::summarize(med_nw = survey_old_median(hh_networth, na.rm = T)) %>% na.omit()
+```
+
+```{r}
+inc_sipp <- inc_sipp  %>%
+  pivot_longer(cols = c(med_nw), names_to = "var", values_to = "val") %>%
+  mutate(var = case_when(grepl("inc", var) ~ "Median Income",
+                         grepl("hv", var) ~ "Median Home Value",
+                         grepl("nw", var) ~ "Median Net Worth")) %>% na.omit()
+```
+
+```{r}
+sipp_nw <- ggplot(inc_sipp,
+       aes(x = age_10y, y = val, color = var, group = var)) +
+  geom_point() + 
+  geom_line() +
+  labs(title = "Median net worth in US SIPP",
+       subtitle = "US SIPP",
+       x = "Age",
+       y = "2018 dollars") +
+  themeDC_horizontal() +
+  theme(legend.title = element_blank(),
+        panel.spacing = unit(2, "lines")) +
+  scale_y_continuous(label = dollar, limits = c(-3000, 450000)) 
+sipp_nw
+```
+
+
+### Median net worth by educational attainment
+
+```{r, fig.height = 3.5, fig.width = 7}
+NOage_education_bins <- LA_prediction_imputed %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  select(age, edu, race_eth, networth) %>% unique() %>%
+  mutate(age_bins = case_when(age %in% c("25-29", "30-34") ~ "25-34",
+                              age %in% c("35-39", "40-44") ~ "35-44",
+                              age %in% c("45-49", "50-54") ~ "45-54",
+                              age %in% c("55-59", "60-64") ~ "55-64",
+                              age %in% c("65-69", "70-74", "75-79", "80-84", "85+") ~ "65+"),
+         edu_bins = case_when(edu %in% c("less than HS", "HS equivalent", "some college") ~ "without degree",
+                              edu %in% c("Bachelor's degree", "Advanced degree") ~ "with degree"))  %>%
+  na.omit()
+
+NOassets_age_edu_race <- NOage_education_bins %>%
+  group_by(age_bins, edu_bins, race_eth) %>%
+  dplyr::summarize(avg_assets = mean(networth, na.rm = T),
+                   median_networth = median(networth, na.rm = T)) %>%
+  mutate(edu_bins = factor(case_when(edu_bins == "without degree" ~ "No Bachelor's degree",
+                                     edu_bins == "with degree" ~ "Bachelor's degree or higher"),
+                           levels = c("No Bachelor's degree", "Bachelor's degree or higher")))
+
+
+NOassets_age_edu_race_plot <- ggplot(NOassets_age_edu_race %>% filter(race_eth %in% c("White, non-Hispanic", "Black, non-Hispanic")),
+                                     aes(age_bins, median_networth, fill = edu_bins)) +
+  geom_col(position = position_dodge()) + 
+  facet_wrap(~race_eth) +
+  
+  labs(title = "Median net worth by educational attainment",
+       subtitle = "Greater New Orleans",
+       x = "Age",
+       y = "2018 Dollars",
+       fill = "",
+       caption = "Source: Estimates by The Data Center, based on the 2018 Survey of Income and Program Participation\nand the 2018 American Community Survey") +
+  coord_cartesian(ylim=c(min(NOassets_age_edu_race$median_networth), 600000)) +
+  scale_fill_manual(values = c(DCcolor.p2purple60, DCcolor.p2teal60))+
+  scale_y_continuous(label = dollar) +
+  themeDC_horizontal() 
+
+NOassets_age_edu_race_plot
+ggsave(NOassets_age_edu_race_plot,  file = "outputs/NOLA-assets-by-race-age-and-edu.png", width = 7, height = 3)
+```
+
+
+```{r}
+
+sipp_svy_bins <- sipp_us %>% 
+  filter(ERELRPE %in% c(1,2) &
+             MONTHCODE == 12 &
+             TLIVQTR %in% c(1,2)) %>%
+  mutate(age_bins = case_when(age %in% c("25-29", "30-34") ~ "25-34",
+                              age %in% c("35-39", "40-44") ~ "35-44",
+                              age %in% c("45-49", "50-54") ~ "45-54",
+                              age %in% c("55-59", "60-64") ~ "55-64",
+                              age %in% c("65-69", "70-74", "75-79", "80-84", "85+") ~ "65+"),
+         edu_bins = case_when(edu %in% c("less than HS", "HS equivalent", "some college") ~ "without degree",
+                              edu %in% c("Bachelor's degree", "Advanced degree") ~ "with degree"),
+         tenure_bins = factor(case_when(tenure %in% c("owned free and clear", "owned with mortgage or loan") ~ "Homeowner",
+                                 tenure %in% c("not owned") ~ "Not homeowner"),
+                              levels = c("Not homeowner", "Homeowner"))) %>%
+  drop_na(tenure_bins) %>%
+  mutate(hh_assets2 = ifelse(hh_any_asset == 0, 0, hh_assets),
+         hh_debts2 = ifelse(hh_any_debt == 0, 0, hh_debts),
+         hh_networth2 = ifelse(hh_any_wealth == 0, 0, hh_networth)) %>%
+   as_survey_rep(weights = WPFINWGT,
+                              repweights = REPWGT0:REPWGT240,
+                              type = "BRR") 
+```
+
+```{r}
+sipp_svy_bins %>%
+  group_by(race_eth, age_bins, edu_bins) %>%
+  srvyr::summarize(
+                   med_wealth_with0s = survey_median(hh_networth2, na.rm = T),
+                   med_wealth_no0s = survey_median(hh_networth, na.rm = T),n())
+```
+
+
+### Median net worth by homeownership status
+
+```{r, fig.height = 3.5, fig.width=7}
+NOLAage_homeowner <- LA_prediction_imputed %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  select(age, race_eth, tenure, networth, asset_dollars, debt_dollars) %>% unique() %>%
+  mutate(age_bins = case_when(age %in% c("25-29", "30-34") ~ "25-34",
+                              age %in% c("35-39", "40-44") ~ "35-44",
+                              age %in% c("45-49", "50-54") ~ "45-54",
+                              age %in% c("55-59", "60-64") ~ "55-64",
+                              age %in% c("65-69", "70-74", "75-79", "80-84", "85+") ~ "65+"),
+         tenure_bins = factor(case_when(tenure %in% c("owned free and clear", "owned with mortgage or loan") ~ "Homeowner",
+                                 tenure %in% c("not owned") ~ "Not homeowner"),
+                              levels = c("Not homeowner", "Homeowner")))  %>%
+  na.omit() %>%
+  group_by(age_bins, race_eth, tenure_bins) %>%
+  dplyr::summarize(med_networth = median(networth),
+                   med_assets = median(asset_dollars),
+                   med_debts = median(debt_dollars),
+                   n = n())
+
+NOLAassets_age_tenure_plot <- ggplot(NOLAage_homeowner %>% filter(race_eth %in% c("White, non-Hispanic", "Black, non-Hispanic")), aes(age_bins, med_networth, fill = tenure_bins)) +
+  geom_col(position = position_dodge()) + 
+  facet_wrap(~race_eth) +
+  
+  labs(title = "Median net worth by homeownership status",
+       subtitle = "Greater New Orleans",
+       x = "Age",
+       y = "2018 Dollars",
+       fill = "",
+       caption = "Source: Estimates by The Data Center, based on the 2018 Survey of Income and Program Participation\nand the 2018 American Community Survey") +
+  scale_fill_manual(values = c(DCcolor.p2purple60, DCcolor.p2teal60))+
+  themeDC_horizontal() +
+  scale_y_continuous(label = dollar)
+
+
+NOLAassets_age_tenure_plot
+ggsave(NOLAassets_age_tenure_plot,  file = "outputs/NOLA-assets-by-race-age-and-tenure.png", width = 7, height = 3)
+
+```
+
+### Share of householders with less than $7,000 net worth by age and race
+
+```{r}
+#for inline text
+LA_prediction_imputed %>%
+  mutate(age_bins = case_when(age %in% c("25-29", "30-34") ~ "25-34",
+                              age %in% c("35-39", "40-44") ~ "35-44",
+                              age %in% c("45-49", "50-54") ~ "45-54",
+                              age %in% c("55-59", "60-64", "65-69", "70-74", "75-79", "80-84", "85+") ~ "55 +")) %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  mutate(under7k = case_when(networth < 7000 ~ 1,
+                             T ~ 0)) %>%
+  group_by(race_eth, age_bins) %>%
+  dplyr::summarise(pct_under7k = sum(under7k == 1)/ n()) %>% na.omit()
+```
+
+
+```{r, fig.width = 7, fig.height=4}
+pct_low_neg <- LA_prediction_imputed %>%
+  mutate(age_bins = case_when(age %in% c("25-29", "30-34") ~ "25-34",
+                              age %in% c("35-39", "40-44") ~ "35-44",
+                              age %in% c("45-49", "50-54") ~ "45-54",
+                              age %in% c("55-59", "60-64") ~ "55-64",
+                              age %in% c("65-69", "70-74", "75-79", "80-84", "85+") ~ "65+")) %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  mutate(under7k = case_when(networth < 7000 ~ 1,
+                             T ~ 0)) %>%
+  group_by(race_eth, age_bins) %>%
+  dplyr::summarise(pct_under7k = sum(under7k == 1)/ n()) %>% na.omit()
+
+low_neg_race <- ggplot(pct_low_neg %>% filter(race_eth %in% c("White, non-Hispanic", "Black, non-Hispanic")), aes(age_bins, pct_under7k, fill = race_eth)) +
+  geom_col(position = position_dodge(), width = .7) +
+  labs(title = "Percent of households with less than $7,000 net worth by age and race",
+       subtitle = "Greater New Orleans",
+       x = "Age",
+       y = "",
+       fill = "",
+       caption = "Source: Estimates by The Data Center, based on the 2018 Survey of Income and Program Participation\nand the 2018 American Community Survey")  +
+  scale_fill_manual(values = race_DCcolors)+
+  themeDC_horizontal() +
+  scale_y_continuous(label = percent)
+low_neg_race
+ggsave(low_neg_race, file = "outputs/pct-hh-under7k-net-assets.png", width = 7, height = 3)
+
+```
+
+
+### Median debt leverage ratio by race
+
+```{r, fig.height = 4, fig.width=7}
+NOLAleverage <- LA_prediction_imputed %>% 
+  filter(debt_dollars > 0 & asset_dollars > 0) %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  filter(race_eth %in% c("White, non-Hispanic","Black, non-Hispanic")) %>%
+  mutate(age_bins = case_when(age %in% c("25-29", "30-34") ~ "25-34",
+                              age %in% c("35-39", "40-44") ~ "35-44",
+                              age %in% c("45-49", "50-54") ~ "45-54",
+                              age %in% c("55-59", "60-64") ~ "55-64",
+                              age %in% c("65-69", "70-74", "75-79", "80-84", "85+") ~ "65+"),
+         leverage = debt_dollars / asset_dollars) %>%
+  group_by(age_bins, race_eth) %>%
+  dplyr::summarise(med_leverage = median(leverage, na.rm = T),
+                   aggregate = sum(debt_dollars, na.rm = T) / sum(asset_dollars, na.rm = T)) %>% na.omit()
+
+lev_NOLAplot <- ggplot(NOLAleverage, aes(age_bins, med_leverage, fill = race_eth)) +
+  geom_col(position = position_dodge(), width = .7) + 
+  labs(title = "Median debt leverage ratio by race",
+       subtitle = "Greater New Orleans",
+       x = "Age",
+       y = "",
+       fill = "",
+       caption = "Source: Estimates by The Data Center, based on the 2018 Survey of Income and Program Participation\nand the 2018 American Community Survey") +
+  scale_fill_manual(values = race_DCcolors) +
+  #scale_y_continuous(label = percent) +
+  themeDC_horizontal() +
+ scale_y_continuous(label = percent, limits = c(0, 1.25))
+
+lev_NOLAplot
+ggsave(lev_NOLAplot, file = "outputs/NOLA-leverage-by-race-age.png", width = 7, height = 3)
+```
+
+```{r}
+sipp_svy_lev <- sipp_us %>% 
+  filter(ERELRPE %in% c(1,2) &
+             MONTHCODE == 12 &
+             TLIVQTR %in% c(1,2)) %>%
+  mutate(age_bins = case_when(age %in% c("25-29", "30-34","35-39", "40-44") ~ "25-44",
+                              age %in% c("45-49", "50-54", "55-59", "60-64") ~ "45-64",
+                              age %in% c("65-69", "70-74", "75-79", "80-84", "85+") ~ "65+"),
+         edu_bins = case_when(edu %in% c("less than HS", "HS equivalent", "some college") ~ "without degree",
+                              edu %in% c("Bachelor's degree", "Advanced degree") ~ "with degree"),
+         tenure_bins = factor(case_when(tenure %in% c("owned free and clear", "owned with mortgage or loan") ~ "Homeowner",
+                                 tenure %in% c("not owned") ~ "Not homeowner"),
+                              levels = c("Not homeowner", "Homeowner"))) %>%
+  drop_na(tenure_bins) %>%
+  mutate(hh_assets2 = ifelse(hh_any_asset == 0, 0, hh_assets),
+         hh_debts2 = ifelse(hh_any_debt == 0, 0, hh_debts),
+         hh_networth2 = ifelse(hh_any_wealth == 0, 0, hh_networth),
+         leverage = hh_debts / hh_assets) %>%
+   as_survey_rep(weights = WPFINWGT,
+                              repweights = REPWGT0:REPWGT240,
+                              type = "BRR") 
+```
+
+```{r}
+sipp_svy_lev %>%
+  filter(race_eth %in% c("White, non-Hispanic", "Black, non-Hispanic")) %>%
+  group_by(race_eth) %>%
+  srvyr::summarise(lev_median = survey_median(leverage, na.rm = T),
+                   avg_assets = survey_mean(hh_assets, na.rm = T),
+                   mean_aggregate = survey_mean(hh_debts, na.rm = T) / survey_mean(hh_assets, na.rm = T),
+                   sum_aggregate = survey_total(hh_debts, na.rm = T) / survey_total(hh_assets, na.rm = T))
+```
+
+
+### Total net worth by race and ethnicity
+
+```{r, fig.height=3, fig.width=7}
+total_networth_byraceNOLA <- LA_prediction_imputed %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  group_by(race_eth) %>%
+  dplyr::summarise(cumsum = sum(networth, na.rm = T),
+                   lab_cumsum = dollar(round(cumsum, -9))) %>%
+  mutate(
+    prop = cumsum/sum(cumsum)) 
+
+total_networth_raceplotNOLA <- ggplot(total_networth_byraceNOLA, aes(race_eth, cumsum, fill = fct_rev(race_eth))) +
+  geom_col() +
+  geom_text(aes(label = lab_cumsum, vjust = -.7), family = "Asap") +
+  scale_fill_manual(values = race_DCcolors,
+                    guide = guide_legend(reverse = T)) +
+  labs(title = "Total net worth for all households by race and ethnicity",
+       subtitle = "Greater New Orleans",
+       y = "",
+       caption = "Source: Estimates by The Data Center, based on the 2018 Survey of Income and Program Participation\nand the 2018 American Community Survey") +
+  ylim(0,190000000000) + 
+  themeDC_scatter() +
+  theme(axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none") 
+
+
+total_networth_raceplotNOLA
+ggsave(total_networth_raceplotNOLA, filename = "outputs/NOLA-cumulative-networth-by-race.png", width = 7, height =3)
+
+```
+
+```{r}
+sipp18US_svy %>%
+ filter(state == 22) %>%
+  srvyr::summarise(cumsum = survey_total(hh_networth, na.rm = T)) %>%
+  mutate(
+    prop = cumsum/sum(cumsum)) 
+```
+
+```{r}
+LA_prediction_imputed %>%
+  dplyr::summarise(cumsum = sum(networth, na.rm = T),
+                   lab_cumsum = dollar(round(cumsum, -9))) %>%
+  mutate(
+    prop = cumsum/sum(cumsum)) 
+```
+
+### create tables
+
+```{r}
+library(jamba)
+```
+
+#### SIPP tables
+
+```{r}
+load(file = here("outputs/SIPP_wealth_holding_median.RData"))
+
+                              
+kable(asset_debt_for_tab,
+             "html",
+      booktabs = T,
+                        col.names = c(" ", "White", "Black",
+                                      "Hispanic",
+                                      "Asian",
+                                      "Other",
+                                      
+                                      "White", "Black",
+                                      "Hispanic",
+                                      "Asian",
+                                      "Other"),
+             align = "r",  table.attr = "style='width:60%;'")  %>%
+  kable_classic(html_font = "Asap") %>%
+  add_header_above(c(" " =1,"Percent holding asset/debt type" = 5,
+                     "Median value of asset/debt for asset/debt holders" = 5)) %>%
+  pack_rows(index = c("Assets" = 10,
+                      "Debts" = 5)) %>%
+  save_kable("outputs/SIPP_wealth_holding_median.html")
+  
+
+webshot2::webshot("outputs/SIPP_wealth_holding_median.html", file = "outputs/SIPP_wealth_holding_median.png")
+```
+
+
+```{r}
+load(file = here("outputs/SIPP_wealth_types.RData"))
+
+kable(asset_debt_pct_tab,
+             "html",
+      booktabs = T,
+             col.names = c(" ", "White", "Black",
+                           "Hispanic", "Asian",
+                           "Other"),
+      format = "html")  %>%
+  
+  add_header_above(c(" " = 1,"Percent of net worth" = 5)) %>%
+  kable_classic(html_font = "Asap") %>%
+  pack_rows(index = c("Assets" = 10,
+                      "Debts" = 6)) %>%
+  add_indent(c(13, 14, 15, 16)) %>% save_kable("outputs/SIPP_wealth_types.html")
+
+
+webshot2::webshot("outputs/SIPP_wealth_types.html", file = "outputs/SIPP_wealth_types.png", vwidth = 1100, vheight = 300)
+
+```
+
+
+#### DFA table
+
+```{r dfa-asset-debt-classes, echo=FALSE, fig.cap= "**Differences in shares of asset and debt classes that make up total net worth by race/ethnicity, 2022 (Source: Distributional Financial Accounts)**"}
+
+load(file = here("outputs/table_DFA_assetsDebtsClasses.Rdata"))
+
+
+dfa.assetsdebts.race.table %>%
+  select(-type) %>%
+  rename(` ` = measure) %>%
+  kable(booktabs = TRUE) %>%   pack_rows(index = table(dfa.assetsdebts.race.table$type)) %>%
+  kable_classic(html_font = "Asap") %>%
+  save_kable("outputs/DFA_table.html")
+
+## NOTE: pack_rows does not work with Word output. Must add grouping rows manually.
+
+webshot2::webshot("outputs/DFA_table.html", file = "outputs/DFA_table.png", vheight = 200)
+```

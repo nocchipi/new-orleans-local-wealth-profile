@@ -1,0 +1,97 @@
+---
+title: "Models"
+author: "Haleigh Tomlin"
+date: "2024-10-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+NOTE: the models included in this notebook each take days to run. When The Data Center ran these models, they were set up to run concurrently in a cloud environment and write the model results to cloud storage. Once the models have been produced, stored, and validated, the next notebook (3b_poststrat.Rmd) should pull in the RData for the model.
+
+There are 4 models in total. The first two are logistic and predict the likelihood of having assets (or debts). The second two are continuous and predict the percent rank in the national asset (or debt) distribution.
+
+```{r}
+library(tidyverse)
+library(lme4)
+library(rstanarm)
+
+options(mc.cores = 4) # if you split the code in this notebook up into multiple processes, make sure that this argument is present in all of them, this is what allows the chains to run in parallel.
+```
+
+```{r}
+#load cleaned SIPP data (object is called "sipp_model")
+
+storage_load_rdata(container = cont_proj, file = "April11_modelvars.RData")
+```
+
+```{r}
+#check for NA's and spot check levels
+
+summary(sipp_model)
+```
+
+## Predict having assets/debts
+
+### Assets
+
+```{r}
+any_asset_model <- stan_glmer(hh_any_asset ~ (1|state) + (1|hh_income) + (1|age) + (1 | race_eth) + (1 | edu) + (1| tenure) + (1|household_type) + male + metro + disability + class_worker + public_assistance + social_security + poverty + citizen,
+      data = sipp_model,
+      family = binomial(link = "logit"))
+```
+
+
+```{r}
+storage_save_rdata(any_asset_model, file = "April11_anyassets.RData")
+```
+
+### Debts
+
+```{r}
+any_debt_model <- stan_glmer(hh_any_debt ~ (1|state) + (1|hh_income) + (1|age) + (1 | race_eth) + (1 | edu) + (1| tenure) + (1|household_type) + male + metro + disability + class_worker + public_assistance + social_security + poverty + citizen,
+      data = sipp_model,
+      family = binomial(link = "logit"),
+      prior = normal(0, 1, autoscale = T))
+```
+
+```{r}
+storage_save_rdata(any_debt_model, file = "April11_anydebts.RData")
+```
+
+## Predict percent rank of assets/debts
+
+### Assets
+
+```{r}
+asset_rankmod <- stan_glmer(prank_assets ~ (1|state) + (1|hh_income) + (1|age) + (1 | race_eth) + (1 | edu) + (1| tenure) + (1|household_type) + male + metro + disability + class_worker + public_assistance + social_security + poverty + citizen + english_at_home  + homevalue + (1|race_eth:state) + (1|race_eth:edu) + (1|race_eth:age) + (1|race_eth:hh_income),
+                       data = sipp_model,
+                       adapt_delta = 0.999, 
+                       #step_size = 0.1, 
+                       #control = list(max_treedepth = 15),
+                       iter = 5000,
+                       save_warmup = FALSE)
+```
+
+```{r}
+storage_save_rdata(asset_rankmod, file = "April11_assetrank.RData")
+```
+
+### Debts
+
+```{r}
+debt_rankmod <- stan_glmer(prank_debts ~ (1|state) + (1|hh_income) + (1|age) + (1 | race_eth) + (1 | edu) + (1| tenure) + (1|household_type) + male + metro + disability + class_worker + public_assistance + social_security + poverty + citizen + english_at_home  + homevalue + (1|race_eth:state) + (1|race_eth:edu) + (1|race_eth:age) + (1|race_eth:hh_income),
+                       data = sipp_model,
+                       adapt_delta = 0.999, 
+                       #step_size = 0.1, 
+                       #control = list(max_treedepth = 15),
+                       iter = 5000,
+                       save_warmup = FALSE)
+```
+
+```{r}
+storage_save_rdata(debt_rankmod, file = "April11_debtrank.RData")
+```
+

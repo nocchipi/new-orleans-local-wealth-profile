@@ -1,0 +1,1793 @@
+---
+title: "Model Validation"
+author: "Haleigh Tomlin"
+date: "2024-04-02"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, results = FALSE)
+```
+
+```{r, results= F, message=F, warning = F}
+library(here)
+source(here("01_libraries_functions.R"))
+```
+
+This file is a little messy, but generates graphics that are presented in the technical paper for the method. The graphic examination of our model is inspired by the Andrew Gelman MRP tutorial: https://bookdown.org/jl5522/MRP-case-studies/introduction-to-mister-p.html#survey-data
+
+This is the least annotated document, but is more thoroughly explained in the technical paper.
+
+```{r load data}
+#load data
+
+storage_load_rdata(container = cont_proj, file = "April11_anyassets.RData")
+storage_load_rdata(container = cont_proj, file = "April11_anydebts.RData")
+storage_load_rdata(container = cont_proj, file = "April11_assetrank.RData")
+storage_load_rdata(container = cont_proj, file = "April11_debtrank.RData")
+
+#this was something we tested at one point but didn't make the cut
+storage_load_rdata(container = cont_proj, file = "April11_anywealth2.RData") 
+storage_load_rdata(container = cont_proj, file = "April11_networthrank.RData")
+
+load("inputs/sipp_us.RData")
+```
+
+```{r}
+states <- tigris::states()
+
+states <- states %>% rename(abb = STATEFP, name = NAME) %>% filter(as.numeric(abb) %in% sipp_us$state)
+```
+
+```{r}
+sipp_psA <- sipp_us  %>% 
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2)) 
+
+sipp_psA <- sipp_psA %>% 
+  select(state,
+         metro,
+         hh_income,
+         male,
+         age,
+         edu,
+         race_eth,
+         tenure,
+         homevalue,
+         disability,
+         class_worker,
+         household_type,
+         citizen,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty,WPFINWGT) %>%
+  group_by(across(-c(WPFINWGT))) %>%
+  na.omit() %>%
+  dplyr::summarize(WGT = sum(WPFINWGT)) %>%
+  ungroup()
+
+```
+```{r}
+sippA_survey <- sipp_us %>% 
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2)) %>%
+
+  select(SSUID, SHHADID, 
+         state,
+         metro,
+         hh_income,
+         male,
+         age,
+         edu,
+         race_eth,
+         tenure,
+         homevalue,
+         disability,
+         class_worker,
+         household_type,
+         citizen,
+         english_at_home,
+         public_assistance,
+         social_security,
+         poverty,
+         hh_any_asset,
+         hh_any_debt,
+         hh_any_wealth,
+         hh_assets,
+         hh_debts,
+         hh_networth,
+         WPFINWGT,
+         REPWGT0:REPWGT240)
+
+wtd_assetsA <- sippA_survey %>% 
+  drop_na(hh_assets) %>%
+  arrange(hh_assets) %>%
+  mutate(prank_assets = lag(cumsum(WPFINWGT), default = 0) / (sum(WPFINWGT) - 1))  
+
+wtd_debtsA <- sippA_survey %>% 
+  drop_na(hh_debts) %>%
+  arrange(hh_debts) %>%
+  mutate(prank_debts = lag(cumsum(WPFINWGT), default = 0) / (sum(WPFINWGT) - 1)) 
+
+wtd_wealthA <- sippA_survey %>% 
+  drop_na(hh_networth) %>%
+  arrange(hh_networth) %>%
+  mutate(prank_networth = lag(cumsum(WPFINWGT), default = 0) / (sum(WPFINWGT) - 1)) 
+
+sippA_survey <- sippA_survey %>% left_join(wtd_assetsA) %>% left_join(wtd_debtsA) %>% left_join(wtd_wealthA)
+```
+
+
+```{r}
+load("inputs/ipums_post_strat.RData")
+```
+
+
+## Predicting having assets
+
+### Gelman error calculation
+
+```{r having assets}
+epred_matA <- posterior_epred(any_asset_model, newdata = sipp_psA, draws = 1000)
+mrp_estimates_vectorA <- epred_matA %*% sipp_psA$WGT / sum(sipp_psA$WGT)
+mrp_estimateA <- c(mean = mean(mrp_estimates_vectorA), sd = sd(mrp_estimates_vectorA))
+cat("MODEL A MRP estimate mean, sd: ", round(mrp_estimateA, 3))
+
+cat("\nTrue (weighted) mean of the survey: ", wtd.mean(as.numeric(sippA_survey$hh_any_asset), sippA_survey$WPFINWGT, na.rm = T) - 1)
+
+cat("\nUnweighted survey mean: ", mean(as.numeric(sippA_survey$hh_any_asset), na.rm = T) - 1)
+#have to minus one because it converted a character to factor, so the levels are "0" and "1" but as numeric it's 1 and 2. weird R thing
+```
+
+```{r having assets ipums}
+epred_ipums <- posterior_epred(any_asset_model, newdata = ipums_post_strat, draws = 1000)
+mrp_estimates_ipums <- epred_ipums %*% ipums_post_strat$WGT / sum(ipums_post_strat$WGT)
+```
+
+State estimates:
+
+```{r}
+# Create empty dataframe
+states_df <- data.frame(
+  state = as.numeric(states$abb),
+  state_name = states$name,
+  mrp_estimate = NA,
+  mrp_estimate_se = NA,
+  full_sipp_estimate = NA,
+  full_sipp_estimate_se = NA,
+  ipums_estimate = NA,
+  ipums_estimate_se = NA,
+  n_full = NA
+)
+
+```
+
+```{r}
+for(i in 1:nrow(states_df)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+  filtering_condition <- which(sipp_psA$state == states_df$state[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  state_epred_mat <- epred_matA[ ,filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  k_filtered <- sipp_psA[filtering_condition, ]$WGT
+
+  # Poststratification step
+  mrp_estimates_vector_sub <- state_epred_mat %*% k_filtered / sum(k_filtered)
+  
+  # MRP estimate for state in row i 
+  states_df$mrp_estimate[i] <- mean(mrp_estimates_vector_sub)
+  states_df$mrp_estimate_se[i] <- sd(mrp_estimates_vector_sub)
+  
+
+  # 60,000-person survey unadjusted estimate for state in row i
+  states_df$full_sipp_estimate[i] <- wtd.mean(
+    as.numeric(filter(sippA_survey, state==states_df$state[i])$hh_any_asset)-1, filter(sippA_survey, state==states_df$state[i])$WPFINWGT, na.rm = T)
+  states_df$n_full[i] <- nrow(filter(sippA_survey, 
+                                              state==states_df$state[i]))
+  
+  #The standard error of the mean is the standard deviation of the population, divided by the square root of the population size.
+  states_df$full_sipp_estimate_se[i] <- get_se_bernoulli(states_df$full_sipp_estimate[i],
+                                                    states_df$n_full[i])
+  
+  if(states_df$state[i] == 22) {
+    states_df$ipums_estimate[i] <- mean(mrp_estimates_ipums)
+    states_df$ipums_estimate_se[i] <- sd(mrp_estimates_ipums)
+  }
+}
+```
+
+```{r assets class state chart, fig.height=5, fig.width=10, fig.align = "center", results=T}
+colors = c("SIPP survey" = "#E37B1C",
+           "MRP prediction on SIPP" = "#7B1CE3",
+           "MRP prediction on Louisiana IPUMS" = "#35A39B")
+
+compare_mrp_asset <- ggplot(data=states_df) +
+  geom_point(aes(x=state_name, y= full_sipp_estimate, color = "SIPP survey"), position = position_nudge(x = -.15)) +
+  geom_errorbar(aes(ymin=full_sipp_estimate - 2*full_sipp_estimate_se,
+                    ymax=full_sipp_estimate + 2*full_sipp_estimate_se,
+                    x=state_name, color = "SIPP survey"), position = position_nudge(x = -.15), alpha=.5, width = .3) +
+  
+  geom_point(data=states_df, aes(x=state_name, y=mrp_estimate, color = "MRP prediction on SIPP"), position = position_nudge(x = .15)) +
+  geom_errorbar(data=states_df, aes(ymin=mrp_estimate - 2*mrp_estimate_se, 
+                                             ymax=mrp_estimate + 2*mrp_estimate_se, 
+                                             x=state_name, color = "MRP prediction on SIPP"), position = position_nudge(x = .15), alpha=.5, width = .3) +
+  
+    geom_point(data=states_df, aes(x=state_name, y=ipums_estimate, color = "MRP prediction on Louisiana IPUMS")) +
+  geom_errorbar(data=states_df, aes(ymin=ipums_estimate - 2*ipums_estimate_se, 
+                                             ymax=ipums_estimate + 2*ipums_estimate_se, 
+                                             x=state_name, color = "MRP prediction on Louisiana IPUMS"), alpha=.5, width = .3) +
+  scale_y_continuous(breaks=c(.90, 1), labels = percent_format()) +
+  # coord_cartesian(ylim=c(.25, .75)) +
+  theme_bw()+
+  
+  scale_color_manual(values = colors) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(x="States",y="Percent having assets prediction", title = "Model A having assets predictions", color = "")+
+  theme(legend.position="none",
+        axis.title=element_text(size=10),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(angle=90,size=8, vjust=0.3),
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=10)) + themeDC_horizontal() +
+  theme(axis.text.x=element_text(angle=90,size=8, vjust=0.3))
+
+compare_mrp_asset 
+```
+
+```{r}
+LA_race_df <- data.frame(
+  race = unique(sipp_us$race_eth),
+  mrp_estimate = NA,
+  mrp_estimate_se = NA,
+  full_sipp_estimate = NA,
+  full_sipp_estimate_se = NA,
+  ipums_estimate = NA,
+  ipums_estimate_se = NA,
+  n_full = NA
+)
+```
+
+```{r}
+for(i in 1:nrow(LA_race_df)) {
+
+  ipums_filtering_condition <- which(ipums_post_strat$race_eth == LA_race_df$race[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  ipums_epred_mat <- epred_ipums[ ,ipums_filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  i_filtered <- ipums_post_strat[ipums_filtering_condition, ]$WGT
+
+  # Poststratification step
+  ipums_estimates_vector_sub <- ipums_epred_mat %*% i_filtered / sum(i_filtered)
+  
+  # MRP estimate for state in row i 
+  LA_race_df$ipums_estimate[i] <- mean(ipums_estimates_vector_sub)
+  LA_race_df$ipums_estimate_se[i] <- sd(ipums_estimates_vector_sub)
+
+}
+```
+
+```{r}
+LA_race_df
+```
+
+
+```{r, fig.height=5, fig.width=10, fig.align = "center", include = T}
+colors = c("SIPP survey" = "#E37B1C",
+           "MRP prediction on SIPP" = "#7B1CE3",
+           "MRP prediction on IPUMS" = "#35A39B")
+
+LArace_comp_mrp <- ggplot(data=LA_race_df) +
+  geom_point(aes(x=race, y= full_sipp_estimate, color = "SIPP survey"), position = position_nudge(x = -.15)) +
+  geom_errorbar(aes(ymin=full_sipp_estimate - 2*full_sipp_estimate_se,
+                    ymax=full_sipp_estimate + 2*full_sipp_estimate_se,
+                    x=race, color = "SIPP survey"), position = position_nudge(x = -.15), alpha=.5, width = .02) +
+  
+  geom_point(data=LA_race_df, aes(x=race, y=mrp_estimate, color = "MRP prediction on SIPP"), position = position_nudge(x = .15)) +
+  geom_errorbar(data=LA_race_df, aes(ymin=mrp_estimate - 2*mrp_estimate_se, 
+                                             ymax=mrp_estimate + 2*mrp_estimate_se, 
+                                             x=race,  color = "MRP prediction on SIPP"), position = position_nudge(x = .15), alpha=.5, width = .02) +
+    
+  
+  geom_point(data=LA_race_df, aes(x=race, y=ipums_estimate, color = "MRP prediction on IPUMS")) +
+  geom_errorbar(data=LA_race_df, aes(ymin=ipums_estimate - 2*ipums_estimate_se, 
+                                             ymax=ipums_estimate + 2*ipums_estimate_se, 
+                                             x=race,  color = "MRP prediction on IPUMS"), alpha=.5, width = .02) +
+  
+
+  scale_color_manual(values = colors) +
+  scale_y_continuous(labels = percent_format()) +
+  coord_cartesian(ylim=c(.7, 1.1)) +
+  theme_bw()+
+  labs(x="Race/ethnicity",y="Percent having assets prediction", title = "Model A having any asset predictions by race - Louisiana", color = "")+
+  theme(legend.position="none",
+        axis.title=element_text(size=10),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(angle=90,size=8, vjust=0.3),
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=10)) + themeDC_horizontal() +
+  theme(axis.text.x=element_text(angle=90,size=8, vjust=0.3))
+
+
+LArace_comp_mrp
+```
+
+# Predict having debts
+
+### Gelman error calculation
+
+```{r having debts sipp}
+epred_debtA <- posterior_epred(any_debt_model, newdata = sipp_psA, draws = 1000)
+mrp_estimates_vectorA <- epred_debtA %*% sipp_psA$WGT / sum(sipp_psA$WGT)
+mrp_estimateA <- c(mean = mean(mrp_estimates_vectorA), sd = sd(mrp_estimates_vectorA))
+cat("MODEL A MRP estimate mean, sd: ", round(mrp_estimateA, 3))
+
+cat("\nTrue (weighted) mean of the survey: ", wtd.mean(as.numeric(sippA_survey$hh_any_debt), sippA_survey$WPFINWGT, na.rm = T) - 1)
+
+cat("\nUnweighted survey mean: ", mean(as.numeric(sippA_survey$hh_any_debt), na.rm = T) - 1)
+#have to minus one because it converted a character to factor, so the levels are "0" and "1" but as numeric it's 1 and 2. weird R thing
+```
+
+```{r having debts ipums}
+epred_debt_ipums <- posterior_epred(any_debt_model, newdata = ipums_post_strat, draws = 1000)
+mrp_debt_ipums <- epred_debt_ipums %*% ipums_post_strat$WGT / sum(ipums_post_strat$WGT)
+```
+
+
+```{r}
+# Create empty dataframe
+states_df <- data.frame(
+  state = as.numeric(states$abb),
+  state_name = states$name,
+  mrp_estimate = NA,
+  mrp_estimate_se = NA,
+  full_sipp_estimate = NA,
+  full_sipp_estimate_se = NA,
+  ipums_estimate = NA,
+  ipums_estimate_se = NA,
+  n_full = NA
+)
+```
+
+```{r}
+for(i in 1:nrow(states_df)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+  filtering_condition <- which(sipp_psA$state == states_df$state[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  state_epred_mat <- epred_debtA[ ,filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  k_filtered <- sipp_psA[filtering_condition, ]$WGT
+
+  # Poststratification step
+  mrp_estimates_vector_sub <- state_epred_mat %*% k_filtered / sum(k_filtered)
+  
+  # MRP estimate for state in row i 
+  states_df$mrp_estimate[i] <- mean(mrp_estimates_vector_sub)
+  states_df$mrp_estimate_se[i] <- sd(mrp_estimates_vector_sub)
+  
+
+  # 60,000-person survey unadjusted estimate for state in row i
+  states_df$full_sipp_estimate[i] <- wtd.mean(
+    as.numeric(filter(sippA_survey, state==states_df$state[i])$hh_any_debt)-1, filter(sippA_survey, state==states_df$state[i])$WPFINWGT, na.rm = T)
+  states_df$n_full[i] <- nrow(filter(sippA_survey, 
+                                              state==states_df$state[i]))
+  
+  #The standard error of the mean is the standard deviation of the population, divided by the square root of the population size.
+  states_df$full_sipp_estimate_se[i] <- get_se_bernoulli(states_df$full_sipp_estimate[i],
+                                                    states_df$n_full[i])
+  
+    if(states_df$state[i] == 22) {
+    states_df$ipums_estimate[i] <- mean(mrp_debt_ipums)
+    states_df$ipums_estimate_se[i] <- sd(mrp_debt_ipums)
+  }
+}
+```
+
+```{r having debts state chart, fig.height=5, fig.width=10, fig.align = "center", include = T}
+
+colors = c("SIPP survey" = "#E37B1C",
+           "MRP prediction on SIPP" = "#7B1CE3",
+           "MRP prediction on Louisiana IPUMS" = "#35A39B")
+compare_mrp_debt <- ggplot(data=states_df) +
+  geom_point(aes(x=state_name, y= full_sipp_estimate, color = "SIPP survey"), position = position_nudge(x = -.15)) +
+  geom_errorbar(aes(ymin=full_sipp_estimate - 2*full_sipp_estimate_se,
+                    ymax=full_sipp_estimate + 2*full_sipp_estimate_se,
+                    x=state_name, color = "SIPP survey"), position = position_nudge(x = -.15), alpha=.5, width = .02) +
+  
+  geom_point(data=states_df, aes(x=state_name, y=mrp_estimate, color = "MRP prediction on SIPP"), position = position_nudge(x = .15)) +
+  geom_errorbar(data=states_df, aes(ymin=mrp_estimate - 2*mrp_estimate_se, 
+                                             ymax=mrp_estimate + 2*mrp_estimate_se, 
+                                             x=state_name, color = "MRP prediction on SIPP"), position = position_nudge(x = .15), alpha=.5, width = .02) +
+  
+    geom_point(data=states_df, aes(x=state_name, y=ipums_estimate, color = "MRP prediction on Louisiana IPUMS")) +
+  geom_errorbar(data=states_df, aes(ymin=ipums_estimate - 2*ipums_estimate_se, 
+                                             ymax=ipums_estimate + 2*ipums_estimate_se, 
+                                             x=state_name, color = "MRP prediction on Louisiana IPUMS"), alpha=.5, width = .02) +
+
+  theme_bw()+
+  
+  scale_color_manual(values = colors) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(x="States",y="Percent having debts prediction", title = "Model A having debts predictions", color = "")+
+  theme(legend.position="none",
+        axis.title=element_text(size=10),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(angle=90,size=8, vjust=0.3),
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=10)) + themeDC_horizontal() +
+  theme(axis.text.x=element_text(angle=90,size=8, vjust=0.3))
+
+compare_mrp_debt 
+```
+
+```{r}
+LA_race_df <- data.frame(
+  race = unique(sipp_us$race_eth),
+  mrp_estimate = NA,
+  mrp_estimate_se = NA,
+  full_sipp_estimate = NA,
+  full_sipp_estimate_se = NA,
+  ipums_estimate = NA,
+  ipums_estimate_se = NA,
+  n_full = NA
+)
+
+for(i in 1:nrow(LA_race_df)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+  #MODEL A
+  filtering_condition <- which(sipp_psA$race_eth == LA_race_df$race[i] &
+                                 sipp_psA$state == 22)
+  
+  # Filtering matrix epred_mat with filtering_condition
+  state_epred_mat <- epred_debtA[ ,filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  k_filtered <- sipp_psA[filtering_condition, ]$WGT
+
+  # Poststratification step
+  mrp_estimates_vector_sub <- state_epred_mat %*% k_filtered / sum(k_filtered)
+  
+  # MRP estimate for state in row i 
+  LA_race_df$mrp_estimate[i] <- mean(mrp_estimates_vector_sub)
+  LA_race_df$mrp_estimate_se[i] <- sd(mrp_estimates_vector_sub)
+  
+  #survey unadjusted estimate for race in row i
+  
+  LA_race_df$full_sipp_estimate[i] <- wtd.mean(
+    as.numeric(filter(sippA_survey, race_eth ==LA_race_df$race[i] & state == 22)$hh_any_debt) - 1,
+    filter(sippA_survey, race_eth ==LA_race_df$race[i] & state == 22)$WPFINWGT, na.rm = T)
+  LA_race_df$n_full[i] <- nrow(filter(sippA_survey, 
+                                              race_eth==LA_race_df$race[i]  & state == 22))
+  
+  #The standard error of the mean is the standard deviation of the population, divided by the square root of the population size.
+  LA_race_df$full_sipp_estimate_se[i] <- get_se_bernoulli(LA_race_df$full_sipp_estimate,
+                                                    LA_race_df$n_full[i])
+  
+  #ipums estimate
+  
+  ipums_filtering_condition <- which(ipums_post_strat$race_eth == LA_race_df$race[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  ipums_epred_mat <- epred_debt_ipums[ ,ipums_filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  i_filtered <- ipums_post_strat[ipums_filtering_condition, ]$WGT
+
+  # Poststratification step
+  ipums_estimates_vector_sub <- ipums_epred_mat %*% i_filtered / sum(i_filtered)
+  
+  # MRP estimate for state in row i 
+  LA_race_df$ipums_estimate[i] <- mean(ipums_estimates_vector_sub)
+  LA_race_df$ipums_estimate_se[i] <- sd(ipums_estimates_vector_sub)
+
+}
+```
+
+```{r, fig.height=5, fig.width=10, fig.align = "center", include = T}
+colors = c("SIPP survey" = "#E37B1C",
+           "MRP prediction on SIPP" = "#7B1CE3",
+           "MRP prediction on Louisiana IPUMS" = "#35A39B")
+
+LArace_comp_mrp <- ggplot(data=LA_race_df) +
+  geom_point(aes(x=race, y= full_sipp_estimate, color = "SIPP survey"), position_nudge(x = -.15)) +
+  geom_errorbar(aes(ymin=full_sipp_estimate - 2*full_sipp_estimate_se,
+                    ymax=full_sipp_estimate + 2*full_sipp_estimate_se,
+                    x=race, color = "SIPP survey"), alpha=.5, width = 0, position_nudge(x = -.15)) +
+  
+  geom_point(data=LA_race_df, aes(x=race, y=mrp_estimate, color = "MRP prediction on SIPP"), position_nudge(x = .15)) +
+  geom_errorbar(data=LA_race_df, aes(ymin=mrp_estimate - 2*mrp_estimate_se, 
+                                             ymax=mrp_estimate + 2*mrp_estimate_se, 
+                                             x=race,  color = "MRP prediction on SIPP"), alpha=.5, width = 0, position_nudge(x = .15)) +
+  
+    geom_point(data=LA_race_df, aes(x=race, y=ipums_estimate, color = "MRP prediction on Louisiana IPUMS")) +
+  geom_errorbar(data=LA_race_df, aes(ymin=ipums_estimate - 2*ipums_estimate_se, 
+                                             ymax=ipums_estimate + 2*ipums_estimate_se, 
+                                             x=race,  color = "MRP prediction on Louisiana IPUMS"), alpha=.5, width = 0) +
+  
+
+  scale_color_manual(values = colors) +
+  coord_cartesian(ylim=c(.45, 1.3)) +
+  theme_bw()+
+  labs(x="Race/ethnicity",y="Percent having debts prediction", title = "Model A having any debt predictions by race - Louisiana", color = "")+
+  theme(legend.position="none",
+        axis.title=element_text(size=10),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(angle=90,size=8, vjust=0.3),
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=10)) + themeDC_horizontal() +
+  theme(axis.text.x=element_text(angle=90,size=8, vjust=0.3))
+
+
+LArace_comp_mrp
+```
+
+
+# Predict having wealth
+
+### Gelman error calculation
+
+```{r having wealth sipp}
+epred_wealthA <- posterior_epred(any_wealth_model, newdata = sipp_psA, draws = 1000)
+mrp_wealthA <- epred_wealthA %*% sipp_psA$WGT / sum(sipp_psA$WGT)
+mrp_wealthA <- c(mean = mean(mrp_wealthA), sd = sd(mrp_wealthA))
+cat("MODEL A MRP estimate mean, sd: ", round(mrp_wealthA, 3))
+
+cat("\nTrue (weighted) mean of the survey: ", wtd.mean(as.numeric(sippA_survey$hh_any_wealth), sippA_survey$WPFINWGT, na.rm = T) - 1)
+
+cat("\nUnweighted survey mean: ", mean(as.numeric(sippA_survey$hh_any_wealth), na.rm = T) - 1)
+#have to minus one because it converted a character to factor, so the levels are "0" and "1" but as numeric it's 1 and 2. weird R thing
+```
+
+
+```{r having wealth ipums}
+epred_wealth_ipums <- posterior_epred(any_wealth_model, newdata = ipums_post_strat, draws = 1000)
+mrp_wealth_ipums <- epred_wealth_ipums %*% ipums_post_strat$WGT / sum(ipums_post_strat$WGT)
+```
+
+```{r}
+# Create empty dataframe
+states_df <- data.frame(
+  state = as.numeric(states$abb),
+  state_name = states$name,
+  mrp_estimate = NA,
+  mrp_estimate_se = NA,
+  full_sipp_estimate = NA,
+  full_sipp_estimate_se = NA,
+  ipums_estimate = NA,
+  ipums_estimate_se = NA,
+  n_full = NA
+)
+```
+
+```{r}
+for(i in 1:nrow(states_df)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+  filtering_condition <- which(sipp_psA$state == states_df$state[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  state_epred_mat <- epred_wealthA[ ,filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  k_filtered <- sipp_psA[filtering_condition, ]$WGT
+
+  # Poststratification step
+  mrp_estimates_vector_sub <- state_epred_mat %*% k_filtered / sum(k_filtered)
+  
+  # MRP estimate for state in row i 
+  states_df$mrp_estimate[i] <- mean(mrp_estimates_vector_sub)
+  states_df$mrp_estimate_se[i] <- sd(mrp_estimates_vector_sub)
+  
+
+  # 60,000-person survey unadjusted estimate for state in row i
+  states_df$full_sipp_estimate[i] <- wtd.mean(
+    as.numeric(filter(sippA_survey, state==states_df$state[i])$hh_any_wealth)-1, filter(sippA_survey, state==states_df$state[i])$WPFINWGT, na.rm = T)
+  states_df$n_full[i] <- nrow(filter(sippA_survey, 
+                                              state==states_df$state[i]))
+  
+  #The standard error of the mean is the standard deviation of the population, divided by the square root of the population size.
+  states_df$full_sipp_estimate_se[i] <- get_se_bernoulli(states_df$full_sipp_estimate[i],
+                                                    states_df$n_full[i])
+  
+  if(states_df$state[i] == 22) {
+    states_df$ipums_estimate[i] <- mean(mrp_wealth_ipums)
+    states_df$ipums_estimate_se[i] <- sd(mrp_wealth_ipums)
+  }
+}
+```
+
+
+```{r having wealth state chart, fig.height=5, fig.width=15, fig.align = "center", include = T}
+colors = c("SIPP survey" = "#E37B1C",
+           "MRP prediction on SIPP" = "#7B1CE3",
+           "MRP prediction on Louisiana IPUMS" = "#35A39B")
+
+compare_mrp_wealth <- ggplot(data=states_df) +
+  geom_point(aes(x=state_name, y= full_sipp_estimate, color = "SIPP survey"), position = position_nudge(x = -.15)) +
+  geom_errorbar(aes(ymin=full_sipp_estimate - 2*full_sipp_estimate_se,
+                    ymax=full_sipp_estimate + 2*full_sipp_estimate_se,
+                    x=state_name, color = "SIPP survey"), alpha=.5, width = .3, position = position_nudge(x = -.15)) +
+  
+  geom_point(data=states_df, aes(x=state_name, y=mrp_estimate, color = "MRP prediction on SIPP"), position = position_nudge(x = .15)) +
+  geom_errorbar(data=states_df, aes(ymin=mrp_estimate - 2*mrp_estimate_se, 
+                                             ymax=mrp_estimate + 2*mrp_estimate_se, 
+                                             x=state_name, color = "MRP prediction on SIPP"), alpha=.5, width = .3, position = position_nudge(x = .15)) +
+  
+    geom_point(data=states_df, aes(x=state_name, y=ipums_estimate, color = "MRP prediction on Louisiana IPUMS")) +
+  geom_errorbar(data=states_df, aes(ymin=ipums_estimate - 2*ipums_estimate_se, 
+                                             ymax=ipums_estimate + 2*ipums_estimate_se, 
+                                             x=state_name, color = "MRP prediction on Louisiana IPUMS"), alpha=.5, width = .3) +
+  scale_y_continuous(labels = percent_format()) +
+  # coord_cartesian(ylim=c(.25, .75)) +
+  theme_bw()+
+  
+  scale_color_manual(values = colors) +
+  labs(x="States",y="Percent having wealth prediction", title = "Model A having wealth predictions", color = "")+
+  theme(legend.position="none",
+        axis.title=element_text(size=10),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(angle=90,size=8, vjust=0.3),
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=10)) + themeDC_horizontal() +
+  theme(axis.text.x=element_text(angle=90,size=8, vjust=0.3))
+
+compare_mrp_wealth 
+```
+
+# Continuous outcomes
+
+Next, I compare the SIPP survey percent rank of assets, debts, and net worth, as well as the MRP prediction conditional on the classification of the previous models.
+
+```{r classification prediction sipp}
+sipp_classified <- sipp_psA %>% 
+  ungroup() %>%
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~add_epred_draws(.x, any_asset_model, ndraws = 1000), 
+                           .options = furrr_options(globals = TRUE,
+                                                     packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")), .progress = T)) %>%
+  unnest() %>%
+  select(-.row) %>%
+  group_by(across(-c(.chain, .iteration, .draw, .epred))) %>%
+  dplyr::summarize(asset_epred = mean(.epred)) %>%
+  ungroup() %>%
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~add_epred_draws(.x, any_debt_model, ndraws = 1000), 
+                           .options = furrr_options(globals = TRUE,
+                                                     packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")), .progress = T)) %>%
+  unnest() %>%
+  select(-.row) %>%
+  group_by(across(-c(.chain, .iteration, .draw, .epred))) %>%
+  dplyr::summarize(debt_epred = mean(.epred)) %>%
+  ungroup()
+  
+```
+
+```{r}
+sipp_classified <- sipp_classified %>%
+  mutate(WGT_asset = round( WGT * asset_epred),
+         WGT_noasset = round(WGT * (1 - asset_epred)),
+         
+         WGT_debt = round(WGT * debt_epred),
+         WGT_nodebt = round(WGT * (1 - debt_epred))) %>%
+  mutate(id_col = row_number()) %>%
+  relocate(id_col)%>%
+  pivot_longer(cols = c(WGT_asset, WGT_noasset), names_to = "asset", values_to = "WGT_asset") %>%
+  pivot_longer(cols = c(WGT_debt, WGT_nodebt), names_to = "debt", values_to = "WGT_debt") %>%
+  mutate(asset = case_when(asset == "WGT_asset" ~ 1,
+                   T ~ 0),
+         debt = case_when(debt == "WGT_debt" ~ 1,
+                          T ~ 0))
+```
+
+```{r}
+#fixing haven labeled?
+ipums_post_strat <- ipums_post_strat %>%
+  mutate(PUMA = as.character(PUMA),
+         COUNTYFIP = as.character(COUNTYFIP),
+         state = as.character(state))
+```
+
+```{r classification prediction ipums}
+
+
+ipums_classified <- ipums_post_strat %>% 
+  ungroup() %>%
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~add_epred_draws(.x, any_asset_model, ndraws = 1000), 
+                           .options = furrr_options(globals = TRUE,
+                                                     packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")), .progress = T)) %>%
+  unnest() %>%
+  select(-.row) %>%
+  group_by(across(-c(.chain, .iteration, .draw, .epred))) %>%
+  dplyr::summarize(asset_epred = mean(.epred)) %>%
+  ungroup() %>%
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~add_epred_draws(.x, any_debt_model, ndraws = 1000), 
+                           .options = furrr_options(globals = TRUE,
+                                                     packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")), .progress = T)) %>%
+  unnest() %>%
+  select(-.row) %>%
+  group_by(across(-c(.chain, .iteration, .draw, .epred))) %>%
+  dplyr::summarize(debt_epred = mean(.epred)) %>%
+  ungroup()
+  
+```
+
+
+```{r}
+ipums_classified <- ipums_classified %>%
+  mutate(WGT_asset = round( WGT * asset_epred),
+         WGT_noasset = round(WGT * (1 - asset_epred)),
+         
+         WGT_debt = round(WGT * debt_epred),
+         WGT_nodebt = round(WGT * (1 - debt_epred))) %>%
+  mutate(id_col = row_number()) %>%
+  relocate(id_col)%>%
+  pivot_longer(cols = c(WGT_asset, WGT_noasset), names_to = "asset", values_to = "WGT_asset") %>%
+  pivot_longer(cols = c(WGT_debt, WGT_nodebt), names_to = "debt", values_to = "WGT_debt") %>%
+  mutate(asset = case_when(asset == "WGT_asset" ~ 1,
+                   T ~ 0),
+         debt = case_when(debt == "WGT_debt" ~ 1,
+                          T ~ 0))
+```
+
+Filter to those who were predicted to have assets:
+
+```{r}
+sipp_class_assets <- sipp_classified %>% filter(asset == 1)
+```
+
+```{r predict asset rank sipp}
+epred_rankA <- posterior_epred(asset_rankmod, newdata = sipp_class_assets, draws = 1000)
+mrp_estimates_vectorA <- epred_rankA %*% sipp_class_assets$WGT_asset / sum(sipp_class_assets$WGT_asset)
+```
+
+```{r}
+ipums_class_assets <- ipums_classified %>% filter(asset == 1)
+```
+
+```{r predict asset rank ipums}
+epred_asset_ipums <- posterior_epred(asset_rankmod, newdata = ipums_class_assets, draws = 1000)
+
+mrp_asset_estimates_ipums <- epred_asset_ipums %*% ipums_class_assets$WGT_asset / sum(ipums_class_assets$WGT_asset)
+```
+
+
+```{r}
+# Create empty dataframe
+states_df <- data.frame(
+  state = as.numeric(states$abb),
+  state_name = states$name,
+  mrp_estimate = NA,
+  mrp_estimate_se = NA,
+  full_sipp_estimate = NA,
+  full_sipp_estimate_se = NA,
+  ipums_estimate = NA,
+  ipums_estimate_se = NA,
+  n_full = NA
+)
+
+states_df
+```
+
+```{r}
+for(i in 1:nrow(states_df)) {
+  filtering_condition <- which(sipp_class_assets$state == states_df$state[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  state_epred_mat <- epred_rankA[ ,filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  k_filtered <- sipp_class_assets[filtering_condition, ]$WGT_asset
+
+  # Poststratification step
+  mrp_estimates_vector_sub <- state_epred_mat %*% k_filtered / sum(k_filtered)
+  
+  # MRP estimate for state in row i 
+  states_df$mrp_estimate[i] <- mean(mrp_estimates_vector_sub)
+  states_df$mrp_estimate_se[i] <- sd(mrp_estimates_vector_sub)
+  
+
+  # 60,000-person survey unadjusted estimate for state in row i
+  states_df$full_sipp_estimate[i] <- wtd.mean(
+    filter(sippA_survey, state==states_df$state[i])$prank_assets, filter(sippA_survey, state==states_df$state[i])$WPFINWGT, na.rm = T)
+  states_df$n_full[i] <- nrow(filter(sippA_survey, 
+                                              state==states_df$state[i]))
+  
+  #The standard error of the mean is the standard deviation of the population, divided by the square root of the population size.
+  states_df$full_sipp_estimate_se[i] <- get_se_mean(filter(sippA_survey, state==states_df$state[i])$prank_assets,
+                                                    states_df$n_full[i])
+  
+  if(states_df$state[i] == 22) {
+    states_df$ipums_estimate[i] <- mean(mrp_estimates_ipums)
+    states_df$ipums_estimate_se[i] <- sd(mrp_estimates_ipums)
+  }
+  
+}
+```
+
+
+```{r, fig.height=5, fig.width=10, fig.align = "center", include = T}
+colors = c("SIPP survey" = "#E37B1C",
+           "MRP prediction on SIPP" = "#7B1CE3",
+           "MRP prediction on Louisiana IPUMS" = "#35A39B")
+
+compare_mrp <- ggplot(data=states_df) +
+  geom_point(aes(x=state_name, y= full_sipp_estimate, color = "SIPP survey"), position = position_nudge(x = -.15)) +
+  geom_errorbar(aes(ymin=full_sipp_estimate - 2*full_sipp_estimate_se,
+                    ymax=full_sipp_estimate + 2*full_sipp_estimate_se,
+                    x=state_name, color = "SIPP survey"), position = position_nudge(x = -.15), alpha=.5, width = .3) +
+  
+  geom_point(data=states_df, aes(x=state_name, y=mrp_estimate, color = "MRP prediction on SIPP"), position = position_nudge(x = .15)) +
+  geom_errorbar(data=states_df, aes(ymin=mrp_estimate - 2*mrp_estimate_se, 
+                                             ymax=mrp_estimate + 2*mrp_estimate_se, 
+                                             x=state_name, color = "MRP prediction on SIPP"), position = position_nudge(x = .15), alpha=.5, width = .3) +
+  
+    geom_point(data=states_df, aes(x=state_name, y=ipums_estimate, color = "MRP prediction on Louisiana IPUMS")) +
+  geom_errorbar(data=states_df, aes(ymin=ipums_estimate - 2*ipums_estimate_se, 
+                                             ymax=ipums_estimate + 2*ipums_estimate_se, 
+                                             x=state_name, color = "MRP prediction on Louisiana IPUMS"), alpha=.5, width = .3) +
+  
+  
+  scale_color_manual(values = colors) +
+  
+  scale_y_continuous(breaks=c(.25,.5,.75), 
+                     labels=c("25","50","75"), 
+                     expand=c(0,0))+
+  coord_cartesian(ylim=c(.25, .75)) +
+  theme_bw()+
+  labs(x="States",y="Asset value percent rank", title = "Model A asset percent rank predictions", color = "")+
+  theme(legend.position="none",
+        axis.title=element_text(size=10),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(angle=90,size=8, vjust=0.3),
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=10)) + themeDC_horizontal() +
+  theme(axis.text.x=element_text(angle=90,size=8, vjust=0.3))
+
+compare_mrp 
+```
+
+
+```{r}
+LA_asset_race_df <- data.frame(
+  race = unique(sipp_us$race_eth),
+  mrp_estimate = NA,
+  mrp_estimate_se = NA,
+  full_sipp_estimate = NA,
+  full_sipp_estimate_se = NA,
+  ipums_estimate = NA,
+  ipums_estimate_se = NA,
+  n_full = NA
+)
+
+NO_asset_race_df <- data.frame(
+  race = unique(sipp_us$race_eth),
+  mrp_estimate = NA,
+  mrp_estimate_se = NA,
+  full_sipp_estimate = NA,
+  full_sipp_estimate_se = NA,
+  ipums_estimate = NA,
+  ipums_estimate_se = NA,
+  n_full = NA
+)
+```
+
+```{r}
+for(i in 1:nrow(LA_asset_race_df)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+  #MODEL A
+  filtering_condition <- which(sipp_class_assets$race_eth == LA_asset_race_df$race[i] &
+                                 sipp_class_assets$state == 22)
+
+  # Filtering matrix epred_mat with filtering_condition
+  state_epred_mat <- epred_rankA[ ,filtering_condition]
+
+  # Filtering poststratification table with filtering_condition
+  k_filtered <- sipp_class_assets[filtering_condition, ]$WGT
+
+  # Poststratification step
+  mrp_estimates_vector_sub <- state_epred_mat %*% k_filtered / sum(k_filtered)
+
+  # MRP estimate for state in row i
+  LA_asset_race_df$mrp_estimate[i] <- mean(mrp_estimates_vector_sub)
+  LA_asset_race_df$mrp_estimate_se[i] <- sd(mrp_estimates_vector_sub)
+
+  #survey unadjusted estimate for race in row i
+
+  LA_asset_race_df$full_sipp_estimate[i] <- wtd.mean(
+    as.numeric(filter(sippA_survey, race_eth ==LA_asset_race_df$race[i] & state == 22)$hh_any_asset) - 1,
+    filter(sippA_survey, race_eth ==LA_asset_race_df$race[i] & state == 22)$WPFINWGT, na.rm = T)
+  LA_asset_race_df$n_full[i] <- nrow(filter(sippA_survey,
+                                              race_eth==LA_asset_race_df$race[i]  & state == 22))
+
+  #The standard error of the mean is the standard deviation of the population, divided by the square root of the population size.
+  LA_asset_race_df$full_sipp_estimate_se[i] <- get_se_bernoulli(LA_asset_race_df$full_sipp_estimate,
+                                                    LA_asset_race_df$n_full[i])
+  # 
+  # #ipums estimate
+  # 
+  ipums_filtering_condition <- which(ipums_classified$race_eth == LA_asset_race_df$race[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  ipums_epred_mat <- epred_asset_ipums[ ,ipums_filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  i_filtered <- ipums_post_strat[ipums_filtering_condition, ]$WGT
+
+  # Poststratification step
+  ipums_estimates_vector_sub <- ipums_epred_mat %*% i_filtered / sum(i_filtered)
+  
+  # MRP estimate for state in row i 
+  LA_asset_race_df$ipums_estimate[i] <- mean(ipums_estimates_vector_sub)
+  LA_asset_race_df$ipums_estimate_se[i] <- sd(ipums_estimates_vector_sub)
+
+}
+```
+
+
+
+
+
+
+
+
+
+
+### Debts:
+
+```{r}
+sipp_class_debt <- sipp_classified %>% filter(debt == 1)
+```
+
+```{r predict debt rank sipp}
+epred_debtA <- posterior_epred(debt_rankmod, newdata = sipp_class_debt, draws = 1000)
+mrp_estimates_debtA <- epred_debtA %*% sipp_class_debt$WGT_debt / sum(sipp_class_debt$WGT_debt)
+debt_estimateA <- c(mean = mean(mrp_estimates_debtA), sd = sd(mrp_estimates_debtA))
+cat("MODEL A MRP debt estimate mean, sd: ", round(debt_estimateA, 3))
+
+cat("\nTrue (weighted) debt mean of the survey: ", wtd.mean(sippA_survey$prank_debts, sippA_survey$WPFINWGT, na.rm = T))
+
+cat("\nUnweighted survey debt mean: ", mean(sippA_survey$prank_debts, na.rm = T))
+```
+
+
+```{r}
+ipums_class_debt <- ipums_classified %>% filter(debt == 1)
+```
+
+```{r predict debt rank ipums}
+epred_debt_ipums <- posterior_epred(debt_rankmod, newdata = ipums_class_debt, draws = 1000)
+
+mrp_debt_ipums <- epred_debt_ipums %*% ipums_class_debt$WGT_debt / sum(ipums_class_debt$WGT_debt)
+```
+
+```{r}
+# Create empty dataframe
+states_debt <- data.frame(
+  state = as.numeric(states$abb),
+  state_name = states$name,
+  mrp_estimate = NA,
+  mrp_estimate_se = NA,
+  full_sipp_estimate = NA,
+  full_sipp_estimate_se = NA,
+  ipums_estimate = NA,
+  ipums_estimate_se = NA,
+  n_full = NA
+)
+
+```
+
+```{r}
+for(i in 1:nrow(states_debt)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+  filtering_condition <- which(sipp_class_debt$state == states_debt$state[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  state_epred_mat <- epred_debtA[ ,filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  k_filtered <- sipp_class_debt[filtering_condition, ]$WGT_debt
+
+  # Poststratification step
+  mrp_estimates_vector_sub <- state_epred_mat %*% k_filtered / sum(k_filtered)
+  
+  # MRP estimate for state in row i 
+  states_debt$mrp_estimate[i] <- mean(mrp_estimates_vector_sub)
+  states_debt$mrp_estimate_se[i] <- sd(mrp_estimates_vector_sub)
+  
+
+  # 60,000-person survey unadjusted estimate for state in row i
+  states_debt$full_sipp_estimate[i] <- wtd.mean(
+    filter(sippA_survey, state==states_debt$state[i])$prank_debts, filter(sippA_survey, state==states_debt$state[i])$WPFINWGT, na.rm = T)
+  states_debt$n_full[i] <- nrow(filter(sippA_survey, 
+                                              state==states_debt$state[i]))
+  
+  #The standard error of the mean is the standard deviation of the population, divided by the square root of the population size.
+  states_debt$full_sipp_estimate_se[i] <- get_se_mean(filter(sippA_survey, state==states_debt$state[i])$prank_debts,
+                                                    states_debt$n_full[i])
+  
+    if(states_debt$state[i] == 22) {
+    states_debt$ipums_estimate[i] <- mean(mrp_debt_ipums)
+    states_debt$ipums_estimate_se[i] <- sd(mrp_debt_ipums)
+  }
+}
+```
+
+
+```{r, fig.height=5, fig.width=10, fig.align = "center", include = T}
+colors = c("SIPP survey" = "#E37B1C",
+           "MRP prediction on SIPP" = "#7B1CE3",
+           "MRP prediction on Louisiana IPUMS" = "#35A39B")
+
+
+compare_debt <- ggplot(data=states_debt) +
+  geom_point(aes(x=state_name, y= full_sipp_estimate, color = "SIPP survey"), position = position_nudge(x = -.15)) +
+  geom_errorbar(aes(ymin=full_sipp_estimate - 2*full_sipp_estimate_se,
+                    ymax=full_sipp_estimate + 2*full_sipp_estimate_se,
+                    x=state_name, color = "SIPP survey"), alpha=.5, width = .2, position = position_nudge(x = -.15)) +
+  
+  geom_point(data=states_debt, aes(x=state_name, y=mrp_estimate, color = "MRP prediction on SIPP"), position = position_nudge(x = .15)) +
+  geom_errorbar(data=states_debt, aes(ymin=mrp_estimate - 2*mrp_estimate_se, 
+                                             ymax=mrp_estimate + 2*mrp_estimate_se, 
+                                             x=state_name, color = "MRP prediction on SIPP"), alpha=.5, width = .2, position = position_nudge(x = .15)) +
+  
+  geom_point(data=states_debt, aes(x=state_name, y=ipums_estimate, color = "MRP prediction on Louisiana IPUMS")) +
+  geom_errorbar(data=states_debt, aes(ymin=ipums_estimate - 2*ipums_estimate_se, 
+                                             ymax=ipums_estimate + 2*ipums_estimate_se, 
+                                             x=state_name, color = "MRP prediction on Louisiana IPUMS"), alpha=.5, width = .2) +
+  
+
+  coord_cartesian(ylim=c(.25, .75)) +
+  scale_color_manual(values = colors) +
+  theme_bw()+
+  labs(x="States",y="Debt value percent rank", title = "Model A debt percent rank predictions", color = "")+
+  theme(legend.position="none",
+        axis.title=element_text(size=10),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(angle=90,size=8, vjust=0.3),
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=10)) + themeDC_horizontal() +
+  theme(axis.text.x=element_text(angle=90,size=8, vjust=0.3))
+
+compare_debt 
+```
+
+```{r wealth classification prediction sipp}
+sipp_wealth_classified <- sipp_psA %>% 
+  ungroup() %>%
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~add_epred_draws(.x, any_wealth_model, ndraws = 1000), 
+                           .options = furrr_options(globals = TRUE,
+                                                     packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")), .progress = T)) %>%
+  unnest() %>%
+  select(-.row) %>%
+  group_by(across(-c(.chain, .iteration, .draw, .epred))) %>%
+  dplyr::summarize(wealth_epred = mean(.epred)) %>%
+  ungroup() 
+```
+
+```{r}
+sipp_wealth_classified <- sipp_wealth_classified %>% 
+  mutate(WGT_wealth = round( WGT * wealth_epred),
+         WGT_nowealth = round(WGT * (1 - wealth_epred))) %>%
+  mutate(id_col = row_number()) %>%
+  relocate(id_col) %>%
+  pivot_longer(cols = c(WGT_wealth, WGT_wealth), names_to = "any_wealth", values_to = "WGT_wealth") %>%
+  mutate(wealth = case_when(any_wealth == "WGT_wealth" ~ 1,
+                   T ~ 0)) 
+```
+
+```{r wealth classification prediction ipums}
+gc()
+ipums_post_strat <- ipums_post_strat %>%
+  mutate(PUMA = as.character(PUMA),
+         COUNTYFIP = as.character(COUNTYFIP),
+         state = as.character(state))
+
+ipums_wealth_classified <- ipums_post_strat %>% 
+  ungroup() %>%
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~add_epred_draws(.x, any_wealth_model, ndraws = 1000), 
+                           .options = furrr_options(globals = TRUE,
+                                                     packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")), .progress = T)) %>%
+  unnest() %>%
+  select(-.row) %>%
+  group_by(across(-c(.chain, .iteration, .draw, .epred))) %>%
+  dplyr::summarize(wealth_epred = mean(.epred)) %>%
+  ungroup()  %>% 
+  mutate(WGT_wealth = round( WGT * wealth_epred),
+         WGT_nowealth = round(WGT * (1 - wealth_epred))) %>%
+  mutate(id_col = row_number()) %>%
+  relocate(id_col) %>%
+  pivot_longer(cols = c(WGT_wealth, WGT_wealth), names_to = "any_wealth", values_to = "WGT_wealth") %>%
+  mutate(wealth = case_when(any_wealth == "WGT_wealth" ~ 1,
+                   T ~ 0)) 
+  
+```
+
+```{r}
+gc()
+sipp_wealth_class <- sipp_wealth_classified %>% filter(wealth == 1)
+
+ipums_wealth_class <- ipums_wealth_classified %>% filter(wealth == 1)
+```
+
+```{r wealth rank sipp}
+epred_wealthA <- posterior_epred(networth_rankmod, newdata = sipp_wealth_class, draws = 1000)
+mrp_estimates_vectorA <- epred_wealthA %*% sipp_wealth_class$WGT_wealth / sum(sipp_wealth_class$WGT_wealth)
+mrp_estimateA <- c(mean = mean(mrp_estimates_vectorA), sd = sd(mrp_estimates_vectorA))
+cat("MODEL A MRP estimate mean, sd: ", round(mrp_estimateA, 3))
+
+cat("\nTrue (weighted) mean of the survey: ", wtd.mean(sippA_survey$prank_networth, sippA_survey$WPFINWGT, na.rm = T))
+
+cat("\nUnweighted survey mean: ", mean(sippA_survey$prank_networth, na.rm = T))
+```
+
+```{r wealth rank ipums}
+epred_wealth_ipums <- posterior_epred(networth_rankmod, newdata = ipums_wealth_class, draws = 1000)
+mrp_wealth_ipums <- epred_wealth_ipums %*% ipums_wealth_class$WGT_wealth / sum(ipums_wealth_class$WGT_wealth)
+
+mean(mrp_wealth_ipums)
+sd(mrp_wealth_ipums)
+```
+
+
+```{r}
+# Create empty dataframe
+states_wealth <- data.frame(
+  state = as.numeric(states$abb),
+  state_name = states$name,
+  mrp_estimate = NA,
+  mrp_estimate_se = NA,
+  full_sipp_estimate = NA,
+  full_sipp_estimate_se = NA,
+  ipums_estimate = NA,
+  ipums_estimate_se = NA,
+  n_full = NA
+)
+```
+
+```{r}
+for(i in 1:nrow(states_wealth)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+  filtering_condition <- which(sipp_wealth_class$state == states_wealth$state[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  state_epred_mat <- epred_wealthA[ ,filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  k_filtered <- sipp_wealth_class[filtering_condition, ]$WGT_wealth
+
+  # Poststratification step
+  mrp_estimates_vector_sub <- state_epred_mat %*% k_filtered / sum(k_filtered)
+  
+  # MRP estimate for state in row i 
+  states_wealth$mrp_estimate[i] <- mean(mrp_estimates_vector_sub)
+  states_wealth$mrp_estimate_se[i] <- sd(mrp_estimates_vector_sub)
+  
+
+  # 60,000-person survey unadjusted estimate for state in row i
+  states_wealth$full_sipp_estimate[i] <- wtd.mean(
+    filter(sippA_survey, state==states_wealth$state[i])$prank_networth, filter(sippA_survey, state==states_wealth$state[i])$WPFINWGT, na.rm = T)
+  states_wealth$n_full[i] <- nrow(filter(sippA_survey, 
+                                              state==states_wealth$state[i]))
+  
+  #The standard error of the mean is the standard deviation of the population, divided by the square root of the population size.
+  states_wealth$full_sipp_estimate_se[i] <- get_se_mean(filter(sippA_survey, state==states_wealth$state[i])$prank_networth,
+                                                    states_wealth$n_full[i])
+  
+  #ipums data
+  if(states_wealth$state[i] == 22) {
+    states_wealth$ipums_estimate[i] <- mean(mrp_wealth_ipums)
+    states_wealth$ipums_estimate_se[i] <- sd(mrp_wealth_ipums)
+  }
+  
+}
+```
+
+```{r wealth state plot, fig.height=5, fig.width=10, fig.align = "center", include = T}
+
+colors = c("SIPP survey" = "#E37B1C",
+           "MRP prediction on SIPP" = "#7B1CE3",
+           "MRP prediction on Louisiana IPUMS" = "#35A39B")
+
+compare_wealth <- ggplot(data=states_wealth) +
+  geom_point(aes(x=state_name, y= full_sipp_estimate, color = "SIPP survey"), position = position_nudge(x = -.15)) +
+  geom_errorbar(aes(ymin=full_sipp_estimate - 2*full_sipp_estimate_se,
+                    ymax=full_sipp_estimate + 2*full_sipp_estimate_se,
+                    x=state_name, color = "SIPP survey"), alpha=.5, width = 0.2, position = position_nudge(x = -.15)) +
+  
+  geom_point(data=states_wealth, aes(x=state_name, y=mrp_estimate, color = "MRP prediction on SIPP"), position = position_nudge(x = .15)) +
+  geom_errorbar(data=states_wealth, aes(ymin=mrp_estimate - 2*mrp_estimate_se, 
+                                             ymax=mrp_estimate + 2*mrp_estimate_se, 
+                                             x=state_name, color = "MRP prediction on SIPP"), alpha=.5, width = 0.2, position = position_nudge(x = .15)) +
+  
+    geom_point(data=states_wealth, aes(x=state_name, y=ipums_estimate, color = "MRP prediction on Louisiana IPUMS")) +
+  geom_errorbar(data=states_wealth, aes(ymin=ipums_estimate - 2*ipums_estimate_se, 
+                                             ymax=ipums_estimate + 2*ipums_estimate_se, 
+                                             x=state_name, color = "MRP prediction on Louisiana IPUMS"), alpha=.5, width = 0.2) +
+  
+  scale_y_continuous(breaks=c(.25,.5,.75), 
+                     labels=c("25","50","75"), 
+                     expand=c(0,0))+
+  coord_cartesian(ylim=c(.25, .75)) +
+  theme_bw()+
+  
+  scale_color_manual(values = colors) +
+  labs(x="States",y="Net worth value percent rank", title = "MRP net worth percent rank predictions", color = "")+
+  theme(legend.position="none",
+        axis.title=element_text(size=10),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(angle=90,size=8, vjust=0.3),
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=10)) + themeDC_horizontal() +
+  theme(axis.text.x=element_text(angle=90,size=8, vjust=0.3))
+
+compare_wealth 
+```
+
+# Comparing SIPP and IPUMS Louisiana Data
+
+So, our estimates from IPUMS seem low. In order to tease out why that might be, we need to think about what could be making the IPUMS estimates low while the MRP predictions on SIPP seem pretty good. 
+
+2 things come to mind. The first is that maybe our model is overfit to SIPP. The second is that IPUMS does not have exact overlap with SIPP since we break down our data so much, so the Louisiana IPUMS data has combinations of variables that we don't see in the SIPP, which gives us different estimates.
+
+If it is overfitting, we would need to reduce the complexity of our model. Gelman says in his MRP tutorial, "MRP depends upon the use of a regularized model (i.e. that prevents overfitting by limiting its complexity)." It would be good to see more literature about this. https://towardsdatascience.com/regularization-avoiding-overfitting-in-machine-learning-bb65d993e9cc
+
+Another thing we should assess is how our IPUMS and SIPP data are different in their representation of Louisiana. Let's just use srvyr and check the differences:
+
+```{r}
+sippLA_svy <- sipp_us  %>%
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2) &
+           state == 22) %>%
+  as_survey_rep(weights = WPFINWGT,
+                repweights = REPWGT1:REPWGT240,
+                type = "Fay",
+                rho = .5)
+
+ipums_svy <- ipums_la %>%
+  filter(YEAR == 2018 & 
+         GQ %in% c(1, 2) &
+           RELATE == 1) %>%
+  as_survey_rep(weight = HHWT,
+                repweights = matches("REPWT[0-9]+"), type = "Fay", rho = 0.5, mse = TRUE)
+```
+
+
+First, race/eth and our interaction variables: age, education, and income
+
+```{r}
+race_edu_sipp <- sippLA_svy %>% 
+  group_by(race_eth, edu) %>%
+  srvyr::summarize(prop = survey_mean(proportion = T),
+                   N = n())
+race_edu_ipums <- ipums_svy %>% 
+  group_by(race_eth, edu) %>%
+  srvyr::summarize(prop = survey_mean(proportion = T),
+                   N = n())
+
+```
+
+```{r}
+race_edu_sipp <- race_edu_sipp %>% mutate(svy = "sipp")
+race_edu_ipums <- race_edu_ipums %>% mutate(svy = "ipums")
+
+race_edu <- race_edu_sipp %>% rbind(race_edu_ipums)
+```
+
+```{r}
+race_edu <- race_edu %>% mutate(lab = paste0("N = ", N))
+```
+
+
+```{r, fig.height = 3.5, fig.width = 8}
+ggplot(race_edu, aes(x = race_eth, y = prop, fill = fct_rev(edu), label = edu)) + 
+  geom_bar(stat = "identity", position = "fill") + 
+  coord_flip() + 
+  facet_wrap(~svy, ncol = 2) +
+  geom_text(aes(label = lab),size = 1.5, position = position_stack(vjust = .5), family="Asap", color = "gray20", alpha = 1) +
+  labs(title = "Race and education in Louisiana from SIPP vs IPUMS", y = "proportion", x = "Race/Ethnicity") +
+  scale_fill_manual(values = rev(c(DCcolor.p2blue20,
+                                   DCcolor.p2blue40,
+                                   DCcolor.p2blue60,
+                                   DCcolor.p2blue80,
+                                   DCcolor.p2blue))) +
+  scale_y_continuous(labels = percent_format()) + 
+  themeDC_vertical() + theme(legend.position="bottom", legend.title = element_blank())
+```
+
+want to check the proportions for each variable in IPUMS and in SIPP.
+
+```{r}
+dim(sippLA_svy)
+dim(ipums_svy)
+```
+SIPP has 446 observations for Louisiana - IPUMS has 18,000. There has to be representation that we see in IPUMS that we don't see in SIPP.
+
+```{r}
+sipp_props <- function(svydata, var) {
+  props_df <- svydata %>% 
+    group_by(!!var) %>%
+    srvyr::summarise(sipp_prop = survey_mean(proportion = T))
+  return(props_df)
+}
+
+ipums_props <- function(svydata, var) {
+  props_df <- svydata %>% 
+    group_by(!!var) %>%
+    srvyr::summarise(ipums_prop = survey_mean(proportion = T))
+  return(props_df)
+}
+```
+
+
+```{r}
+vars <- colnames(ipums_post_strat[, -c(1,2,20)])
+
+empty_df <- data.frame()
+
+
+for(i in vars){
+
+  props_df <- sippLA_svy %>% 
+    group_by(get(i)) %>%
+    srvyr::summarise(sipp_prop = survey_mean()) %>% 
+    rename(levels = "get(i)")%>% 
+    mutate(levels = paste0(i,": ",  levels))
+  
+  props_df2 <- ipums_svy %>% 
+    group_by(get(i)) %>%
+    srvyr::summarise(ipums_prop = survey_mean()) %>% 
+    rename(levels = "get(i)") %>% 
+    mutate(levels = paste0(i,": ",  levels)) %>%
+    left_join(props_df) %>% ungroup() %>% select(levels, sipp_prop, sipp_prop_se, ipums_prop, ipums_prop_se)
+
+  empty_df <- rbind(empty_df, props_df2)
+  
+}
+```
+
+```{r}
+ empty_df %>% mutate(abs_diff = abs(sipp_prop - ipums_prop)) %>% View()
+```
+
+
+US sipp percentage in each income bin:
+
+```{r}
+
+sipp18US_svy <- sipp_us  %>%
+  filter(ERELRPE %in% c(1,2) &
+           MONTHCODE == 12 &
+           TLIVQTR %in% c(1,2)) %>%
+  as_survey_rep(weights = WPFINWGT,
+                repweights = REPWGT1:REPWGT240,
+                type = "Fay",
+                rho = .5)
+```
+
+```{r}
+sipp18US_svy %>% 
+    group_by(hh_income) %>%
+    srvyr::summarise(sipp_prop = survey_mean()) 
+```
+
+
+```{r}
+old <- empty_df %>% mutate(abs_diff = abs(sipp_prop - ipums_prop)) %>% arrange(desc(abs_diff))
+old
+```
+
+Ok, so we do see some differences in the IPUMS and SIPP samples for some of our variables, which we'd expect since there are just 446 Louisiana observations in SIPP compared to 18,000 observations in IPUMS. The biggest differences are in the proportions that have social security and public assistance incomes. in the SIPP Louisiana sample, just 31% receive social security income compared to 56% of the ipums sample (is that high?!). 8% of the SIPP sample receive public assistance income compared to 28% of the IPUMS sample.
+
+SIPP also shows a higher presence of very high income households - 28% with over $200,000 in household income whereas IPUMS shows about 4.5% of househlds making over $200,000. We expect differences in our small Louisiana SIPP sample versus our IPUMS sample. Our IPUMS sample shows less high-income households, and more households on public assistance and with social security income. This could contribute to our lower estimates when we predict on our IPUMS data.
+
+
+```{r}
+beepr::beep(sound = 2)
+```
+
+
+## Graphical Model Checking section of Technical Paper 
+
+We go through the buildup of intuition in the technical paper with the asset models, and then include the supplemental models in Appendix B.
+
+#### New Orleans rank race predictions
+```{r}
+NO_race_df <- ipums_post_strat %>%
+  select(race_eth) %>%
+  unique() %>%
+  mutate(ipums_estimate = NA,
+         ipums_estimate_se = NA,
+         n_full = NA)
+
+NO_race_df
+```
+```{r}
+colors = c("MRP prediction on ACS" = "#35A39B")
+
+NOrace_comp_mrp <- ggplot(data=NO_race_df) +
+geom_point(aes(x=race_eth, y=ipums_estimate, color = "MRP prediction on ACS")) +
+  geom_errorbar(aes(ymin=ipums_estimate - 2*ipums_estimate_se, 
+                                             ymax=ipums_estimate + 2*ipums_estimate_se, 
+                                             x=race_eth,  color = "MRP prediction on IPUMS"), alpha=.5, width = .02) +
+  
+
+  scale_color_manual(values = colors) +
+  #coord_cartesian(ylim=c(.7, 1.1)) +
+  theme_bw()+
+  labs(x="Race/ethnicity",y="Asset percent rank prediction", title = "", color = "")+
+  theme(legend.position="none",
+        axis.title=element_text(size=10),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(angle=90,size=8, vjust=0.3),
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=10)) + themeDC_horizontal() +
+  theme(axis.text.x=element_text(angle=90,size=8, vjust=0.3))
+
+
+NOrace_comp_mrp
+```
+
+
+```{r}
+for(i in 1:nrow(NO_race_df)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+
+  ipums_filtering_condition1 <- which(ipums_class_assets$race_eth == NO_race_df$race_eth[i] &
+                                        ipums_class_assets$PUMA %in% NOmsa.pumacodes)
+  
+
+  
+  # Filtering matrix epred_mat with filtering_condition
+  ipums_epred_mat <- epred_asset_ipums[ , ipums_filtering_condition1]
+  
+  # Filtering poststratification table with filtering_condition
+  i_filtered <- matrix(ipums_class_assets[ipums_filtering_condition1, ]$WGT)
+
+  # Poststratification step
+  ipums_estimates_vector_sub <- ipums_epred_mat %*% i_filtered / sum(i_filtered)
+  
+  # MRP estimate for state in row i 
+  NO_race_df$ipums_estimate[i] <- mean(ipums_estimates_vector_sub)
+  NO_race_df$ipums_estimate_se[i] <- sd(ipums_estimates_vector_sub)
+
+}
+```
+
+```{r}
+NO_race_df
+```
+
+
+
+## Local graphical display
+
+#### 3 disaggregations
+
+Assets: In New Orleans, race, age, and tenure
+
+```{r}
+NO_3var_df <- ipums_post_strat %>%
+  select(race_eth, age, tenure) %>%
+  unique() %>%
+  mutate(ipums_estimate = NA,
+         ipums_estimate_se = NA,
+         n_full = NA)
+
+NO_3var_df
+
+LA_3var_df <- ipums_post_strat %>%
+  select(race_eth, age, tenure) %>%
+  unique() %>%
+  mutate(ipums_estimate = NA,
+         ipums_estimate_se = NA,
+         n_full = NA)
+
+LA_3var_df
+```
+
+```{r}
+for(i in 1:nrow(NO_3var_df)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+
+  ipums_filtering_condition1 <- which(ipums_post_strat$race_eth == NO_3var_df$race_eth[i] &
+                                       ipums_post_strat$age == NO_3var_df$age[i] &
+                                       ipums_post_strat$tenure == NO_3var_df$tenure[i] &
+                                        ipums_post_strat$PUMA %in% NOmsa.pumacodes)
+  
+
+  # Filtering matrix epred_mat with filtering_condition
+  ipums_epred_mat <- epred_asset_ipums[ , ipums_filtering_condition1]
+  
+  # Filtering poststratification table with filtering_condition
+  i_filtered <- matrix(ipums_post_strat[ipums_filtering_condition1, ]$WGT)
+
+  # Poststratification step
+  ipums_estimates_vector_sub <- ipums_epred_mat %*% i_filtered / sum(i_filtered)
+  
+  # MRP estimate for state in row i 
+  NO_3var_df$ipums_estimate[i] <- mean(ipums_estimates_vector_sub)
+  NO_3var_df$ipums_estimate_se[i] <- sd(ipums_estimates_vector_sub)
+
+}
+
+for(i in 1:nrow(LA_3var_df)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+
+  ipums_filtering_condition <- which(ipums_post_strat$race_eth == LA_3var_df$race_eth[i] &
+                                       ipums_post_strat$age == LA_3var_df$age[i] &
+                                       ipums_post_strat$tenure == LA_3var_df$tenure[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  ipums_epred_mat <- epred_asset_ipums[ , ipums_filtering_condition]
+  
+  # Filtering poststratification table with filtering_condition
+  i_filtered <- matrix(ipums_post_strat[ipums_filtering_condition, ]$WGT)
+
+  # Poststratification step
+  ipums_estimates_vector_sub <- ipums_epred_mat %*% i_filtered / sum(i_filtered)
+  
+  # MRP estimate for state in row i 
+  LA_3var_df$ipums_estimate[i] <- mean(ipums_estimates_vector_sub)
+  LA_3var_df$ipums_estimate_se[i] <- sd(ipums_estimates_vector_sub)
+
+}
+```
+
+Showing stability of predictions
+
+```{r}
+NO_3var_df %>%
+  filter(race_eth %in% c("White, non-Hispanic", "Black, non-Hispanic")) %>%
+  mutate(MOE = ipums_estimate_se * 1.645) %>%
+  arrange(age, tenure) %>% 
+  mutate(CV = ipums_estimate_se / ipums_estimate) %>% arrange(desc(ipums_estimate_se))
+```
+
+```{r}
+LA_3var_df  %>% 
+  mutate(CV = ipums_estimate_se / ipums_estimate) %>% arrange(desc(ipums_estimate_se))
+```
+
+including Educational attainment:
+
+```{r}
+NO_edu_df <- ipums_post_strat %>%
+  select(race_eth, age, edu) %>%
+  unique() %>%
+  mutate(ipums_estimate = NA,
+         ipums_estimate_se = NA,
+         n_full = NA)
+
+
+for(i in 1:nrow(NO_edu_df)) {
+  # Currently, the matrix epred_mat and the poststratification table contain 12,000
+  # rows. We need to filter the ones that correspond to state in row i. We do so 
+  # by defining the following condition:
+
+  ipums_filtering_condition1 <- which(ipums_post_strat$race_eth == NO_edu_df$race_eth[i] &
+                                       ipums_post_strat$age == NO_edu_df$age[i] &
+                                       ipums_post_strat$edu == NO_edu_df$edu[i] &
+                                        ipums_post_strat$PUMA %in% NOmsa.pumacodes)
+  
+  # ipums_filtering_condition2 <- which(ipums_post_strat$race_eth == NO_3var_df$race_eth[i] &
+  #                                      ipums_post_strat$age == NO_3var_df$age[i] &
+  #                                      ipums_post_strat$tenure == NO_3var_df$tenure[i])
+  
+  # Filtering matrix epred_mat with filtering_condition
+  ipums_epred_mat <- epred_asset_ipums[ , ipums_filtering_condition1]
+  
+  # Filtering poststratification table with filtering_condition
+  i_filtered <- matrix(ipums_post_strat[ipums_filtering_condition1, ]$WGT)
+
+  # Poststratification step
+  ipums_estimates_vector_sub <- ipums_epred_mat %*% i_filtered / sum(i_filtered)
+  
+  # MRP estimate for state in row i 
+  NO_edu_df$ipums_estimate[i] <- mean(ipums_estimates_vector_sub)
+  NO_edu_df$ipums_estimate_se[i] <- sd(ipums_estimates_vector_sub)
+
+}
+
+
+NO_edu_df %>% 
+  mutate(CV = ipums_estimate_se / ipums_estimate) %>% arrange(desc(ipums_estimate_se))
+```
+
+
+
+Showing the number of observations by race in our 3-var breakdowns
+
+```{r}
+ipums_la %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  group_by(race_eth, age, tenure) %>%
+  dplyr::summarise(n_obs = n(),
+                   sum_WGT = sum(HHWT)) %>% arrange(n_obs)
+```
+
+```{r}
+ipums_la %>%
+  filter(PUMA %in% NOmsa.pumacodes) %>%
+  mutate(age_bins = case_when(age %in% c("25-29", "30-34") ~ "25-34",
+                              age %in% c("35-39", "40-44") ~ "35-44",
+                              age %in% c("45-49", "50-54") ~ "45-54",
+                              age %in% c("55-59", "60-64") ~ "55-64",
+                              age %in% c("65-69", "70-74", "75-79", "80-84", "85+") ~ "65+"),
+         tenure_bins = factor(case_when(tenure %in% c("owned free and clear", "owned with mortgage or loan") ~ "Homeowner",
+                                 tenure %in% c("not owned") ~ "Not homeowner"),
+                              levels = c("Not homeowner", "Homeowner"))) %>%
+  na.omit() %>%  group_by(race_eth, age_bins, tenure_bins) %>%
+  dplyr::summarise(n_obs = n(),
+                   sum_WGT = sum(HHWT)) %>% arrange(n_obs)
+```
+
+
+Need to create a percentage by race where N > 50 for a given 3-variable cell combination.
+
+Prove that our percent rerank is okay:
+
+```{r}
+ipums_post_strat_classified <- ipums_post_strat %>% 
+  ungroup() %>%
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~add_epred_draws(.x, any_asset_model, ndraws = 1000), 
+                           .options = furrr_options(globals = TRUE,
+                                                     packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")), .progress = T)) %>%
+  unnest() %>%
+  select(-.row) %>%
+  group_by(across(-c(.chain, .iteration, .draw, .epred))) %>%
+  dplyr::summarize(asset_epred = mean(.epred)) %>% 
+  ungroup() %>%
+  
+  #predict debts
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~add_epred_draws(.x, any_debt_model, ndraws = 1000), 
+                           .options = furrr_options(globals = TRUE,
+                                                     packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")), .progress = T)) %>%
+  unnest() %>%
+  select(-.row) %>%
+  group_by(across(-c(.chain, .iteration, .draw, .epred))) %>%
+  dplyr::summarize(debt_epred = mean(.epred)) %>%
+  ungroup() 
+```
+
+```{r}
+ipums_post_strat_classified <- ipums_post_strat_classified %>% 
+  mutate(WGT_asset = round( WGT * asset_epred),
+         WGT_noasset = round(WGT * (1 - asset_epred)),
+         
+         WGT_debt = round(WGT * debt_epred),
+         WGT_nodebt = round(WGT * (1 - debt_epred))) %>%
+  mutate(id_col = row_number()) %>%
+  relocate(id_col) %>%
+  pivot_longer(cols = c(WGT_asset, WGT_noasset), names_to = "asset", values_to = "WGT_asset") %>%
+  pivot_longer(cols = c(WGT_debt, WGT_nodebt), names_to = "debt", values_to = "WGT_debt") %>%
+  mutate(asset = case_when(asset == "WGT_asset" ~ 1,
+                   T ~ 0),
+         debt = case_when(debt == "WGT_debt" ~ 1,
+                          T ~ 0)) 
+```
+
+
+```{r}
+ipums_post_strat_classified
+```
+
+```{r}
+#fixing haven labeled?
+ipums_post_strat <- ipums_post_strat %>%
+  mutate(PUMA = as.character(PUMA),
+         COUNTYFIP = as.character(COUNTYFIP),
+         state = as.character(state))
+```
+
+Note: it took HT's pc 2.3 min to run, the R GiB icon went above 11 Gi B and for a second it used 90% of my CPU in task manager, and over 90% of memory. 
+
+```{r}
+#the idea here is to run the add_epred_draws one row at a time, but since they don't depend on each other, they'll run simultaneously using future/furrr
+
+start_time <- Sys.time()
+
+epred_table <- ipums_post_strat_classified %>% 
+  ungroup() %>%
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~add_epred_draws(.x, asset_rankmod, ndraws = 1000), 
+                           .options = furrr_options(globals = TRUE,
+                                                     packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")), .progress = T)) %>%
+  unnest() %>%
+  select(-.row) %>%
+  group_by(across(-c(.chain, .iteration, .draw, .epred))) %>%
+  dplyr::summarize(asset_epred = wtd.mean(.epred, WGT),
+            asset_epred_sd = sqrt(wtd.var(.epred, weights = WGT))/sqrt(sum(WGT))) %>%
+  ungroup() %>%
+  
+  nest(.key = "data") %>%
+  mutate(data = future_map(data, ~add_epred_draws(.x, debt_rankmod, ndraws = 1000), 
+                           .options = furrr_options(globals = TRUE,
+                                                     packages = c("rlang",
+                                                                  "dplyr",
+                                                                  "furrr",
+                                                                  "rstanarm",
+                                                                  "tidybayes")), .progress = T)) %>%
+  unnest() %>%
+  select(-.row) %>%
+  group_by(across(-c(.chain, .iteration, .draw, .epred))) %>%
+  dplyr::summarize(debt_epred = wtd.mean(.epred, WGT),
+            debt_epred_sd = sqrt(wtd.var(.epred, weights = WGT))/sqrt(sum(WGT))) %>%
+  ungroup()
+
+end_time <- Sys.time()
+end_time - start_time
+```
+
