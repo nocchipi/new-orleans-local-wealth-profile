@@ -12,12 +12,15 @@ Not all code in this repository is meant to be run locally. The code for the mod
 ## Sequence of events
 
 01_libraries_functions.R
+
 02_data_cleaning.Rmd
 
 03a_models.Rmd 
+
 model_validation.Rmd
 
 03b_poststrat.Rmd
+
 04_graphics.Rmd
 
 
@@ -32,4 +35,5 @@ model_validation.Rmd - This file doesn't have much documentation. It generates g
 03b_poststrat.Rmd - After generating the model objects from the code in 03a_models, this file does the post-stratification of the models onto the local IPUMS data. This is where the final dataframe for the analysis & graphics gets created. This process is computationally intense for a short time. It runs on my PC, but nearly maxes out the CPU for a few minutes. There will be updates to this file in the future from The Data Center, including error calculations.
 
 04_graphics.Rmd - This file generates the graphics for Metro New orleans included in the wealth profile.
+
 
