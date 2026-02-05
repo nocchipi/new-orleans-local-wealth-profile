@@ -2,3 +2,9 @@
 .Rhistory
 .RData
 .Ruserdata
+
+python_data_cleaning/ipums_data
+python_data_cleaning/sipp_data
+python_data_cleaning/output
+.env
+.vscode
