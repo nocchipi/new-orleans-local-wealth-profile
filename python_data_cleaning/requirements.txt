@@ -2,3 +2,6 @@ polars
 rpy2
 ipumspy
 bambi
+numpyro
+jax
+ipywidgets
