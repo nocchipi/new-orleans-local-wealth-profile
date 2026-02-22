@@ -6,7 +6,7 @@
 python_data_cleaning/ipums_data
 python_data_cleaning/sipp_data
 python_data_cleaning/output
-models/
+python_data_cleaning/models
 archive/
 .env
 .vscode
