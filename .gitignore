@@ -3,10 +3,10 @@
 .RData
 .Ruserdata
 
-python_data_cleaning/ipums_data
-python_data_cleaning/sipp_data
-python_data_cleaning/output
-python_data_cleaning/models
-archive/
+python_code/ipums_data
+python_code/sipp_data
+python_code/output
+python_code/models
+python_code/archive/
 .env
 .vscode
