@@ -1,3 +1,5 @@
 polars
 rpy2
 ipumspy
+dataclasses
+xarray
