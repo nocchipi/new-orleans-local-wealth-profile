@@ -3,3 +3,4 @@ rpy2
 ipumspy
 dataclasses
 xarray
+plotly
